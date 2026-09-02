@@ -22,7 +22,12 @@ def login_app(tmp_path, monkeypatch):
     password = auth_store.ensure_account(TEST_EMAIL, db_path)
 
     original_login_email = config.app.get("login_email", "")
+    original_login_senha = config.app.get("login_senha", "")
     config.app["login_email"] = TEST_EMAIL
+    # Uma senha fixa real em config.toml (login_senha) sobrescreveria a senha
+    # gerada por ensure_account acima, quebrando o teste só em máquinas com
+    # essa opção configurada. Isola igual ao login_email.
+    config.app["login_senha"] = ""
     try:
         with patch.object(config, "try_save_config", return_value=True):
             app = AppTest.from_file(str(WEBUI_MAIN), default_timeout=60)
@@ -30,6 +35,7 @@ def login_app(tmp_path, monkeypatch):
             yield app, password
     finally:
         config.app["login_email"] = original_login_email
+        config.app["login_senha"] = original_login_senha
 
 
 def test_unauthenticated_session_only_shows_login_form(login_app):
