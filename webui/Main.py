@@ -50,6 +50,9 @@ from app.services import (
     cache_manager,
     llm,
     loomloom,
+    material,
+    metaso_minimax,
+    ofox,
     video,
     volcengine_seedance,
     voice,
@@ -121,6 +124,22 @@ VOICE_MODE_TTS = "tts"
 VOICE_MODE_UPLOAD = "upload"
 VOICE_MODE_NONE = "none"
 LOOMLOOM_MAX_POLL_FAILURES = 5
+# WebUI 按素材能力分组展示视频来源，但底层仍保存原有 video_source 值。
+# AI 视频组与设置页共用同一业务顺序：合作服务商优先，并按秘塔、胜算云、
+# 火山引擎排列；其余服务随后展示。这样用户在两个入口看到的顺序一致，同时
+# 不改变 config.toml、历史任务和 API 请求中的字段语义，旧用户无需迁移配置。
+VIDEO_SOURCE_GROUPS = {
+    "stock_video": ("pexels", "pixabay", "coverr"),
+    "ai_video": (
+        "metaso_minimax",
+        "loomloom",
+        "volcengine_seedance",
+        "wavespeed",
+        "ofox",
+    ),
+    "ai_image": ("openai_image",),
+    "local": ("local",),
+}
 # Upload-Post 的 API Key 与发布用户分别在两个页面管理，并且发布用户名称
 # 不等于登录邮箱。集中维护入口可以避免多语言文案各自硬编码 URL 后发生偏差，
 # 也方便用户从 WebUI 直接完成首次配置和后续账号维护。
@@ -247,12 +266,11 @@ NON_LLM_COMPANION_KEYS = {
     "app": ("upload_post_username", "youtube_client_id")
 }
 # 同一个密钥在不同面板可能使用各自的控件 key：音频面板直接编辑 Gemini 和
-# MiMo 的 LLM 密钥，胜算云密钥的控件没有 _input 后缀。恢复备份时必须清除
-# 每一个别名，否则遗留的旧值会在下一次 rerun 覆盖刚刚恢复的密钥。
+# MiMo 的 LLM 密钥。恢复备份时必须清除每一个别名，否则遗留的旧值
+# 会在下一次 rerun 覆盖刚刚恢复的密钥。
 CREDENTIAL_WIDGET_STATE_ALIASES = {
     ("app", "gemini_api_key"): ("gemini_tts_api_key_input",),
     ("app", "mimo_api_key"): ("mimo_tts_api_key_input",),
-    ("app", "loomloom_api_token"): ("loomloom_user_api_token",),
 }
 # ui 分区只保存界面偏好，不含任何凭据，备份时整体跳过。
 KEY_BACKUP_EXCLUDED_SECTIONS = frozenset({"ui"})
@@ -588,6 +606,8 @@ def _initialize_session_state():
         "loomloom_video_confirm_charge": False,
         "wavespeed_confirm_charge": False,
         "volcengine_seedance_confirm_charge": False,
+        "ofox_confirm_charge": False,
+        "metaso_minimax_confirm_charge": False,
         # AI 视频按素材段计费，默认只生成一段，用户确认效果后再主动增加数量。
         "loomloom_video_scene_count": _saved_ui_number(
             "loomloom_video_scene_count",
@@ -1666,6 +1686,20 @@ def _dismiss_settings_dialog():
     st.session_state["settings_dialog_open"] = False
 
 
+def _open_settings_dialog(target_tab=None):
+    """打开设置弹窗，并可直接定位到指定业务标签页。"""
+    st.session_state["settings_dialog_open"] = True
+    if target_tab:
+        # 这里只保存稳定的业务 ID，不保存翻译文本；真正创建 tabs 前再根据
+        # 当前界面语言解析 label，避免用户切换语言后旧文案成为非法选项。
+        st.session_state["settings_dialog_target_tab"] = target_tab
+
+
+def _open_material_settings_dialog():
+    """供视频来源组件回调使用：直接打开素材服务设置。"""
+    _open_settings_dialog("material")
+
+
 def _render_brand(available_update: str | None = None):
     """渲染项目名称、当前版本和可选的更新入口。"""
     update_link = ""
@@ -1740,14 +1774,14 @@ def _render_top_bar():
             _render_task_manager_entry()
             _render_schedule_manager_entry()
 
-            if st.button(
+            st.button(
                 tr("Settings"),
                 key="open_settings_dialog_button",
                 type="secondary",
                 icon=":material/settings:",
                 width="content",
-            ):
-                st.session_state["settings_dialog_open"] = True
+                on_click=_open_settings_dialog,
+            )
 
             language_codes = list(locales.keys())
             selected_index = 0
@@ -2267,6 +2301,221 @@ def stable_selectbox(label, options, default_value, key, format_func=None, **kwa
         key=widget_key,
         **kwargs,
     )
+
+
+# Streamlit 原生 selectbox 暂不支持 HTML optgroup。这里使用 1.59 自带的
+# Components v2 封装原生 <select>/<optgroup>，无需引入前端依赖，同时保留浏览器
+# 原生的键盘导航、无障碍语义和移动端选择体验。组件只传递固定业务值和翻译文本，
+# 不接收任意 HTML，从边界上避免配置内容进入 innerHTML。
+_GROUPED_SELECT_COMPONENT = st.components.v2.component(
+    "mpt_grouped_select",
+    html="""
+        <div class="mpt-grouped-select">
+            <div class="mpt-grouped-select__label-row">
+                <label class="mpt-grouped-select__label"></label>
+                <button class="mpt-grouped-select__settings" type="button"></button>
+            </div>
+            <div class="mpt-grouped-select__control">
+                <select></select>
+            </div>
+        </div>
+    """,
+    css="""
+        .mpt-grouped-select {
+            width: 100%;
+            color: var(--st-text-color);
+            font-family: var(--st-font);
+        }
+
+        .mpt-grouped-select__label-row {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: baseline;
+            gap: 0.45rem;
+            margin-bottom: 0.35rem;
+        }
+
+        .mpt-grouped-select__label {
+            font-size: 0.875rem;
+            line-height: 1.25rem;
+        }
+
+        .mpt-grouped-select__settings {
+            padding: 0;
+            border: 0;
+            background: transparent;
+            color: var(--st-link-color);
+            font: inherit;
+            font-size: 0.8rem;
+            line-height: 1.25rem;
+            cursor: pointer;
+        }
+
+        .mpt-grouped-select__settings:hover {
+            text-decoration: underline;
+            text-underline-offset: 0.15rem;
+        }
+
+        .mpt-grouped-select__settings:focus-visible {
+            border-radius: 0.2rem;
+            outline: 2px solid var(--st-primary-color);
+            outline-offset: 2px;
+        }
+
+        .mpt-grouped-select__control {
+            position: relative;
+        }
+
+        .mpt-grouped-select__control::after {
+            position: absolute;
+            top: 50%;
+            right: 1rem;
+            width: 0.55rem;
+            height: 0.55rem;
+            border-right: 2px solid currentColor;
+            border-bottom: 2px solid currentColor;
+            content: "";
+            pointer-events: none;
+            transform: translateY(-70%) rotate(45deg);
+        }
+
+        .mpt-grouped-select select {
+            width: 100%;
+            min-height: 2.5rem;
+            padding: 0.45rem 2.75rem 0.45rem 0.75rem;
+            border: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+            border-radius: 0.5rem;
+            outline: none;
+            appearance: none;
+            background: var(--st-secondary-background-color);
+            color: inherit;
+            font: inherit;
+            cursor: pointer;
+        }
+
+        .mpt-grouped-select select:hover {
+            border-color: color-mix(in srgb, currentColor 36%, transparent);
+        }
+
+        .mpt-grouped-select select:focus-visible {
+            border-color: var(--st-primary-color);
+            box-shadow: 0 0 0 1px var(--st-primary-color);
+        }
+    """,
+    js="""
+        export default function(component) {
+            const { data, parentElement, setTriggerValue } = component;
+            const label = parentElement.querySelector("label");
+            const settings = parentElement.querySelector(".mpt-grouped-select__settings");
+            const select = parentElement.querySelector("select");
+
+            label.textContent = data.label;
+            settings.textContent = data.settingsLabel;
+            settings.hidden = !data.settingsLabel;
+            select.id = data.controlId;
+            label.htmlFor = data.controlId;
+            select.setAttribute("aria-label", data.label);
+            select.replaceChildren();
+
+            for (const groupData of data.groups) {
+                const group = document.createElement("optgroup");
+                group.label = groupData.label;
+                for (const optionData of groupData.options) {
+                    const option = document.createElement("option");
+                    option.value = optionData.value;
+                    option.textContent = optionData.label;
+                    group.appendChild(option);
+                }
+                select.appendChild(group);
+            }
+
+            select.value = data.value;
+            const handleChange = () => {
+                setTriggerValue("selected", select.value);
+            };
+            const handleSettings = () => {
+                setTriggerValue("settings", true);
+            };
+            select.addEventListener("change", handleChange);
+            settings.addEventListener("click", handleSettings);
+
+            return () => {
+                select.removeEventListener("change", handleChange);
+                settings.removeEventListener("click", handleSettings);
+            };
+        }
+    """,
+)
+
+
+def grouped_selectbox(
+    label,
+    groups,
+    default_value,
+    key,
+    format_func=None,
+    settings_label="",
+    on_settings=None,
+):
+    """渲染带不可选分组标题的单个下拉框，并返回稳定业务值。"""
+    if format_func is None:
+        format_func = str
+
+    normalized_groups = []
+    valid_values = []
+    for group_label, options in groups:
+        normalized_options = []
+        for option in options:
+            valid_values.append(option)
+            normalized_options.append(
+                {"value": option, "label": str(format_func(option))}
+            )
+        if normalized_options:
+            normalized_groups.append(
+                {"label": str(group_label), "options": normalized_options}
+            )
+
+    if not valid_values:
+        raise ValueError(f"grouped selectbox options cannot be empty: {key}")
+    if len(set(valid_values)) != len(valid_values):
+        raise ValueError(f"grouped selectbox options must be unique: {key}")
+    if default_value not in valid_values:
+        default_value = valid_values[0]
+
+    # 业务选择保存在与旧 selectbox 相同的 session key 中，设置预设恢复和
+    # 语言切换逻辑无需分叉；组件自身使用独立 key，避免与业务状态冲突。
+    widget_key = localized_widget_key(key)
+    if widget_key not in st.session_state:
+        st.session_state[widget_key] = default_value
+    selected_value = st.session_state[widget_key]
+    if selected_value not in valid_values:
+        selected_value = default_value
+        st.session_state[widget_key] = selected_value
+
+    result = _GROUPED_SELECT_COMPONENT(
+        key=f"{widget_key}_component",
+        data={
+            "label": label,
+            "settingsLabel": settings_label,
+            # 显式关联可见 label 与原生 select。组件 key 由固定业务名称和
+            # 语言代码组成，在页面内唯一，既方便鼠标点击标签聚焦控件，
+            # 也不会引入随机 ID 导致每次 rerun 都重建前端状态。
+            "controlId": f"{widget_key}_control",
+            "value": selected_value,
+            "groups": normalized_groups,
+        },
+        on_selected_change=lambda: None,
+        on_settings_change=on_settings or (lambda: None),
+    )
+    changed_value = getattr(result, "selected", None)
+    if changed_value in valid_values and changed_value != selected_value:
+        st.session_state[widget_key] = changed_value
+        # Components v2 在当前脚本轮次返回事件时，本轮传给前端的 data 仍是
+        # 事件发生前的旧值。立即自动 rerun，让组件和依赖 video_source 的控件
+        # 同时收到新值；否则下拉框会被旧 data 短暂覆盖，用户只能再选一次。
+        st.rerun()
+
+    return selected_value
 
 
 def sync_script_order_concat_mode():
@@ -2873,22 +3122,36 @@ def _render_settings_dialog():
         # 历史 hide_config 只用于隐藏旧基础设置面板。改为固定设置入口后，该值
         # 不再有用户可见意义，统一迁移为 false，避免旧配置影响后续版本。
         _set_runtime_config("app", "hide_config", False)
+        settings_tab_labels = [
+            tr("LLM Settings Tab"),
+            tr("Material API Tab"),
+            tr("Auto-Publish Settings"),
+            tr("Interface Settings Tab"),
+            tr("Key Backup Tab"),
+            tr("Cache Management Tab"),
+        ]
+        settings_tab_targets = {
+            "llm": tr("LLM Settings Tab"),
+            "material": tr("Material API Tab"),
+        }
+        settings_tabs_key = localized_widget_key("settings_dialog_tabs")
+        target_tab = st.session_state.pop("settings_dialog_target_tab", None)
+        if target_tab in settings_tab_targets:
+            # st.tabs 使用显示 label 作为状态值。入口按钮只保存稳定业务 ID，
+            # 到这里再写入当前语言的 label，即可精确定位且兼容语言切换。
+            st.session_state[settings_tabs_key] = settings_tab_targets[target_tab]
+
         (
             middle_config_panel,
             right_config_panel,
-            key_backup_panel,
-            cache_config_panel,
             publish_config_panel,
             left_config_panel,
+            key_backup_panel,
+            cache_config_panel,
         ) = st.tabs(
-            [
-                tr("LLM Settings Tab"),
-                tr("Material API Tab"),
-                tr("Key Backup Tab"),
-                tr("Cache Management Tab"),
-                tr("Auto-Publish Settings"),
-                tr("Interface Settings Tab"),
-            ]
+            settings_tab_labels,
+            key=settings_tabs_key,
+            on_change="rerun",
         )
 
         with publish_config_panel:
@@ -3400,79 +3663,385 @@ def _render_settings_dialog():
 
         # 右侧面板 - API 密钥设置
         with right_config_panel:
-            pexels_api_key = _get_material_api_keys("pexels_api_keys")
-            pexels_api_key = st.text_input(
-                tr("Pexels API Key"),
-                value=pexels_api_key,
-                type="password",
-                key="pexels_api_keys_input",
-            )
-            _save_material_api_keys("pexels_api_keys", pexels_api_key)
+            # 素材 Provider 按「搜索库存素材 / AI 生成视频 / AI 生成图片」
+            # 分组，避免随着 Provider 增多后所有字段在一个长列表中混排。
+            # 分组只调整展示层级，不改动已有配置键，旧用户升级后
+            # 会继续读取原有 config.toml 值。
+            with st.container(border=True):
+                st.markdown(f"#### {tr('Stock Video APIs')}")
+                st.caption(tr("Stock Video APIs Help"))
 
-            pixabay_api_key = _get_material_api_keys("pixabay_api_keys")
-            pixabay_api_key = st.text_input(
-                tr("Pixabay API Key"),
-                value=pixabay_api_key,
-                type="password",
-                key="pixabay_api_keys_input",
-            )
-            _save_material_api_keys("pixabay_api_keys", pixabay_api_key)
+                pexels_api_key = _get_material_api_keys("pexels_api_keys")
+                pixabay_api_key = _get_material_api_keys("pixabay_api_keys")
+                coverr_api_key = _get_material_api_keys("coverr_api_keys")
+                pexels_api_key = st.text_input(
+                    tr("Pexels API Key"),
+                    value=pexels_api_key,
+                    type="password",
+                    key="pexels_api_keys_input",
+                )
+                _save_material_api_keys("pexels_api_keys", pexels_api_key)
 
-            coverr_api_key = _get_material_api_keys("coverr_api_keys")
-            coverr_api_key = st.text_input(
-                tr("Coverr API Key"),
-                value=coverr_api_key,
-                type="password",
-                key="coverr_api_keys_input",
-            )
-            _save_material_api_keys("coverr_api_keys", coverr_api_key)
+                pixabay_api_key = st.text_input(
+                    tr("Pixabay API Key"),
+                    value=pixabay_api_key,
+                    type="password",
+                    key="pixabay_api_keys_input",
+                )
+                _save_material_api_keys("pixabay_api_keys", pixabay_api_key)
 
-            wavespeed_api_key = _get_material_api_keys("wavespeed_api_keys")
-            wavespeed_api_key = st.text_input(
-                tr("WaveSpeed API Key"),
-                value=wavespeed_api_key,
-                type="password",
-                key="wavespeed_api_keys_input",
-            )
-            _save_material_api_keys("wavespeed_api_keys", wavespeed_api_key)
+                coverr_api_key = st.text_input(
+                    tr("Coverr API Key"),
+                    value=coverr_api_key,
+                    type="password",
+                    key="coverr_api_keys_input",
+                )
+                _save_material_api_keys("coverr_api_keys", coverr_api_key)
 
-            seedance_api_key = st.text_input(
-                tr("Volcano Engine Ark API Key"),
-                value=str(config.app.get("volcengine_seedance_api_key", "") or ""),
-                type="password",
-                key="volcengine_seedance_api_key_input",
-            )
-            _set_runtime_config(
-                "app", "volcengine_seedance_api_key", seedance_api_key.strip()
-            )
-            seedance_model = st.text_input(
-                tr("Volcano Engine Seedance Model"),
-                value=str(
+            with st.container(border=True):
+                st.markdown(f"#### {tr('AI Video Generation APIs')}")
+                st.caption(tr("AI Video Generation APIs Help"))
+
+                # 视频生成 Provider 按赞助商优先展示，赞助商内部顺序
+                # 与商务约定保持一致：秘塔、胜算云、火山引擎。
+                st.markdown(f"**{tr('Metaso MiniMax H3')}**")
+                metaso_api_key = st.text_input(
+                    tr("Metaso MiniMax API Key"),
+                    value=str(
+                        config.app.get("metaso_minimax_api_key", "") or ""
+                    ).strip(),
+                    type="password",
+                    help=tr("Metaso MiniMax API Key Help"),
+                    key="metaso_minimax_api_key_input",
+                )
+                _set_runtime_config(
+                    "app", "metaso_minimax_api_key", metaso_api_key.strip()
+                )
+                configured_metaso_base_url = str(
+                    config.app.get(
+                        "metaso_minimax_base_url",
+                        metaso_minimax.DEFAULT_BASE_URL,
+                    )
+                    or metaso_minimax.DEFAULT_BASE_URL
+                ).strip()
+                metaso_base_url = st.text_input(
+                    tr("Metaso MiniMax Base URL"),
+                    value=(
+                        ""
+                        if configured_metaso_base_url == metaso_minimax.DEFAULT_BASE_URL
+                        else configured_metaso_base_url
+                    ),
+                    placeholder=metaso_minimax.DEFAULT_BASE_URL,
+                    key="metaso_minimax_base_url_input",
+                )
+                _set_runtime_config(
+                    "app",
+                    "metaso_minimax_base_url",
+                    metaso_base_url.strip() or metaso_minimax.DEFAULT_BASE_URL,
+                )
+                configured_metaso_resolution = (
+                    str(
+                        config.app.get(
+                            "metaso_minimax_resolution",
+                            metaso_minimax.DEFAULT_RESOLUTION,
+                        )
+                    )
+                    .strip()
+                    .upper()
+                )
+                metaso_resolution_options = sorted(
+                    metaso_minimax.SUPPORTED_RESOLUTIONS,
+                    key=lambda value: value != metaso_minimax.DEFAULT_RESOLUTION,
+                )
+                resolution_is_valid = (
+                    configured_metaso_resolution
+                    in metaso_minimax.SUPPORTED_RESOLUTIONS
+                )
+                if not resolution_is_valid:
+                    # 分辨率直接影响计费。手工配置错误时保留原值并要求用户
+                    # 主动选择，不能在打开设置弹窗时静默改成价格更高的 2K。
+                    st.error(
+                        tr("Metaso MiniMax Invalid Resolution").format(
+                            value=configured_metaso_resolution,
+                            supported=", ".join(metaso_resolution_options),
+                        )
+                    )
+                metaso_resolution = st.selectbox(
+                    tr("Metaso MiniMax Resolution"),
+                    options=metaso_resolution_options,
+                    index=(
+                        metaso_resolution_options.index(configured_metaso_resolution)
+                        if resolution_is_valid
+                        else None
+                    ),
+                    key="metaso_minimax_resolution_input",
+                    help=tr("Metaso MiniMax Resolution Help"),
+                    placeholder=tr("Select Metaso MiniMax Resolution"),
+                )
+                if metaso_resolution is not None:
+                    _set_runtime_config(
+                        "app", "metaso_minimax_resolution", metaso_resolution
+                    )
+
+                st.divider()
+                st.markdown(f"**{tr('Shengsuan Cloud AI Video')}**")
+                app_config_snapshot = config.snapshot_config_with_pending(config.app)
+                if (
+                    str(app_config_snapshot.get("llm_provider", "") or "").lower()
+                    == "shengsuanyun"
+                ):
+                    # 大模型 Provider 已选胜算云时，视频生成直接复用
+                    # 同一密钥，不再展示一个容易引起歧义的独立输入框。
+                    st.caption(tr("Shengsuan Cloud API Key Reused"))
+                else:
+                    configured_loomloom_token = str(
+                        app_config_snapshot.get("loomloom_api_token", "") or ""
+                    ).strip()
+                    loomloom_api_token = st.text_input(
+                        tr("Shengsuan Cloud API Key"),
+                        value=configured_loomloom_token,
+                        type="password",
+                        key="loomloom_api_token_input",
+                        help=tr("Shengsuan Cloud API Key Help"),
+                        placeholder=tr("Shengsuan Cloud API Key Placeholder"),
+                    ).strip()
+                    _set_runtime_config(
+                        "app", "loomloom_api_token", loomloom_api_token
+                    )
+
+                st.divider()
+                seedance_api_key_value = str(
+                    config.app.get("volcengine_seedance_api_key", "") or ""
+                ).strip()
+                shared_ark_api_key = str(
+                    config.app.get("volcengine_api_key", "") or ""
+                ).strip()
+                environment_ark_api_key = os.getenv(
+                    "VOLCENGINE_ARK_API_KEY", ""
+                ).strip()
+                seedance_reuses_llm_key = bool(
+                    not seedance_api_key_value
+                    and not environment_ark_api_key
+                    and shared_ark_api_key
+                )
+                seedance_title = f"**{tr('Volcano Engine Seedance')}**"
+                if seedance_reuses_llm_key:
+                    # 只有复用大模型密钥无法从当前输入框直接看出，保留该提示
+                    # 可以避免用户误以为必须重复填写；普通配置状态不再赘述。
+                    seedance_title += f" :blue[{tr('Reusing LLM API Key')}]"
+                st.markdown(seedance_title)
+                seedance_api_key = st.text_input(
+                    tr("Volcano Engine Ark API Key"),
+                    value=seedance_api_key_value,
+                    type="password",
+                    help=tr("Volcano Engine Ark API Key Help"),
+                    key="volcengine_seedance_api_key_input",
+                )
+                _set_runtime_config(
+                    "app", "volcengine_seedance_api_key", seedance_api_key.strip()
+                )
+                configured_seedance_model = str(
                     config.app.get(
                         "volcengine_seedance_model",
                         volcengine_seedance.DEFAULT_MODEL_ID,
                     )
                     or volcengine_seedance.DEFAULT_MODEL_ID
-                ),
-                key="volcengine_seedance_model_input",
-            )
-            _set_runtime_config(
-                "app", "volcengine_seedance_model", seedance_model.strip()
-            )
-            seedance_base_url = st.text_input(
-                tr("Volcano Engine Ark Base URL"),
-                value=str(
+                ).strip()
+                seedance_model = st.text_input(
+                    tr("Volcano Engine Seedance Model"),
+                    # 内置默认值通过 placeholder 展示，用户自定义的
+                    # 模型或接入点 ID 仍作为真实值展示和保存。
+                    value=(
+                        ""
+                        if configured_seedance_model
+                        == volcengine_seedance.DEFAULT_MODEL_ID
+                        else configured_seedance_model
+                    ),
+                    placeholder=volcengine_seedance.DEFAULT_MODEL_ID,
+                    key="volcengine_seedance_model_input",
+                )
+                _set_runtime_config(
+                    "app",
+                    "volcengine_seedance_model",
+                    seedance_model.strip() or volcengine_seedance.DEFAULT_MODEL_ID,
+                )
+                configured_seedance_base_url = str(
                     config.app.get(
                         "volcengine_seedance_base_url",
                         volcengine_seedance.DEFAULT_BASE_URL,
                     )
                     or volcengine_seedance.DEFAULT_BASE_URL
-                ),
-                key="volcengine_seedance_base_url_input",
-            )
-            _set_runtime_config(
-                "app", "volcengine_seedance_base_url", seedance_base_url.strip()
-            )
+                ).strip()
+                seedance_base_url = st.text_input(
+                    tr("Volcano Engine Ark Base URL"),
+                    value=(
+                        ""
+                        if configured_seedance_base_url
+                        == volcengine_seedance.DEFAULT_BASE_URL
+                        else configured_seedance_base_url
+                    ),
+                    placeholder=volcengine_seedance.DEFAULT_BASE_URL,
+                    key="volcengine_seedance_base_url_input",
+                )
+                _set_runtime_config(
+                    "app",
+                    "volcengine_seedance_base_url",
+                    seedance_base_url.strip() or volcengine_seedance.DEFAULT_BASE_URL,
+                )
+
+                st.divider()
+                wavespeed_api_key = _get_material_api_keys("wavespeed_api_keys")
+                st.markdown("**WaveSpeed**")
+                wavespeed_api_key = st.text_input(
+                    tr("WaveSpeed API Key"),
+                    value=wavespeed_api_key,
+                    type="password",
+                    key="wavespeed_api_keys_input",
+                )
+                _save_material_api_keys("wavespeed_api_keys", wavespeed_api_key)
+
+                st.divider()
+                st.markdown("**OFox**")
+                ofox_api_key = st.text_input(
+                    tr("OFox API Key"),
+                    value=str(config.app.get("ofox_api_key", "") or ""),
+                    type="password",
+                    key="ofox_api_key_input",
+                )
+                _set_runtime_config("app", "ofox_api_key", ofox_api_key.strip())
+                ofox_model = st.text_input(
+                    tr("OFox Text-to-Video Model"),
+                    value=str(
+                        config.app.get(
+                            "ofox_text_to_video_model",
+                            ofox.DEFAULT_MODEL_ID,
+                        )
+                        or ofox.DEFAULT_MODEL_ID
+                    ),
+                    key="ofox_text_to_video_model_input",
+                )
+                _set_runtime_config(
+                    "app", "ofox_text_to_video_model", ofox_model.strip()
+                )
+                configured_ofox_base_url = str(
+                    config.app.get("ofox_base_url", ofox.DEFAULT_BASE_URL)
+                    or ofox.DEFAULT_BASE_URL
+                ).strip()
+                ofox_base_url = st.text_input(
+                    tr("OFox Base URL"),
+                    value=(
+                        ""
+                        if configured_ofox_base_url == ofox.DEFAULT_BASE_URL
+                        else configured_ofox_base_url
+                    ),
+                    placeholder=ofox.DEFAULT_BASE_URL,
+                    key="ofox_base_url_input",
+                )
+                _set_runtime_config(
+                    "app",
+                    "ofox_base_url",
+                    ofox_base_url.strip() or ofox.DEFAULT_BASE_URL,
+                )
+                ofox_vendor_options = [
+                    (tr("OFox Vendor BytePlus"), "byteplus"),
+                    (tr("OFox Vendor Volcengine"), "volcengine"),
+                    (tr("OFox Vendor Auto"), ""),
+                ]
+                configured_ofox_vendor = str(
+                    config.app.get("ofox_provider", ofox.DEFAULT_PROVIDER_TYPE)
+                    or ""
+                ).strip()
+                if configured_ofox_vendor not in {
+                    value for _, value in ofox_vendor_options
+                }:
+                    # 用户在 config.toml 手工钉定了其它厂商名时保留该选择，
+                    # 避免打开设置页就被下拉框覆盖回默认值。
+                    ofox_vendor_options.append(
+                        (configured_ofox_vendor, configured_ofox_vendor)
+                    )
+                selected_ofox_vendor = stable_selectbox(
+                    tr("OFox Upstream Vendor"),
+                    options=[value for _, value in ofox_vendor_options],
+                    default_value=configured_ofox_vendor,
+                    key="ofox_provider_select",
+                    format_func=lambda value: dict(
+                        (v, label) for label, v in ofox_vendor_options
+                    )[value],
+                    help=tr("OFox Upstream Vendor Help"),
+                )
+                _set_runtime_config("app", "ofox_provider", selected_ofox_vendor)
+
+            with st.container(border=True):
+                st.markdown(f"#### {tr('AI Image Generation APIs')}")
+                st.caption(tr("AI Image Generation APIs Help"))
+                st.markdown(f"**{tr('OpenAI Compatible Text-to-Image')}**")
+
+                openai_image_base_url = st.text_input(
+                    tr("OpenAI Image Base URL"),
+                    value=str(config.app.get("openai_image_base_url", "") or ""),
+                    placeholder="https://api.openai.com/v1",
+                    key="openai_image_base_url_input",
+                )
+                _set_runtime_config(
+                    "app", "openai_image_base_url", openai_image_base_url.strip()
+                )
+
+                openai_image_api_key = _get_material_api_keys(
+                    "openai_image_api_keys"
+                )
+                openai_image_api_key = st.text_input(
+                    tr("OpenAI Image API Key"),
+                    value=openai_image_api_key,
+                    type="password",
+                    help=tr("OpenAI Image API Key Help"),
+                    key="openai_image_api_keys_input",
+                )
+                _save_material_api_keys(
+                    "openai_image_api_keys", openai_image_api_key
+                )
+
+                openai_image_model = st.text_input(
+                    tr("OpenAI Image Model"),
+                    value=str(config.app.get("openai_image_model", "") or ""),
+                    placeholder="gpt-image-2",
+                    key="openai_image_model_input",
+                )
+                _set_runtime_config(
+                    "app", "openai_image_model", openai_image_model.strip()
+                )
+                # 只展示参考值，不将 OpenAI 官方端点写成默认配置。
+                # 兼容服务的 Base URL 和模型 ID 没有统一值；留空不会让
+                # 用户在未知情时误连官方付费接口，也不会覆盖旧配置。
+                st.caption(tr("OpenAI Image Configuration Example"))
+
+                with st.expander(
+                    tr("OpenAI Image Advanced Settings"), expanded=False
+                ):
+                    openai_image_size = st.text_input(
+                        tr("OpenAI Image Size"),
+                        value=str(config.app.get("openai_image_size", "") or ""),
+                        placeholder="1024x1536",
+                        help=tr("OpenAI Image Size Help"),
+                        key="openai_image_size_input",
+                    )
+                    _set_runtime_config(
+                        "app", "openai_image_size", openai_image_size.strip()
+                    )
+
+                    openai_image_prompt_template = st.text_input(
+                        tr("OpenAI Image Prompt Template"),
+                        value=str(
+                            config.app.get("openai_image_prompt_template", "") or ""
+                        ),
+                        placeholder="cinematic photo of {term}, photorealistic",
+                        help=tr("OpenAI Image Prompt Template Help"),
+                        key="openai_image_prompt_template_input",
+                    )
+                    _set_runtime_config(
+                        "app",
+                        "openai_image_prompt_template",
+                        openai_image_prompt_template.strip(),
+                    )
 
     _save_runtime_config()
 
@@ -3509,26 +4078,6 @@ def _effective_script_generation_backend():
         app_config_snapshot.get("script_generation_backend", "local") or "local"
     ).strip()
     return backend if backend in {"local", "loomloom"} else "local"
-
-
-def _render_loomloom_api_token_input():
-    """仅在未选择胜算云 Provider 时显示独立 LoomLoom 密钥输入。"""
-    app_config_snapshot = config.snapshot_config_with_pending(config.app)
-    if str(app_config_snapshot.get("llm_provider", "") or "").lower() == "shengsuanyun":
-        st.caption(tr("Shengsuan Cloud API Key Reused"))
-        return loomloom.resolve_api_token(app_config_snapshot)
-
-    configured_token = loomloom.resolve_api_token(app_config_snapshot)
-    st.session_state.setdefault("loomloom_user_api_token", configured_token)
-    api_token = st.text_input(
-        tr("Shengsuan Cloud API Key"),
-        type="password",
-        key="loomloom_user_api_token",
-        help=tr("Shengsuan Cloud API Key Help"),
-        placeholder=tr("Shengsuan Cloud API Key Placeholder"),
-    ).strip()
-    _set_runtime_config("app", "loomloom_api_token", api_token)
-    return _effective_loomloom_api_token()
 
 
 def _loomloom_video_scene_prompts(video_terms, subject, scene_count):
@@ -3600,9 +4149,7 @@ def _current_loomloom_video_quote_context(params):
 def _render_loomloom_video_settings(params):
     """渲染默认视频 SkillBot 的报价、报价失效和付费确认流程。"""
     st.caption(tr("Shengsuan Cloud AI Video Help"))
-    if _effective_script_generation_backend() != "loomloom":
-        _render_loomloom_api_token_input()
-    elif (
+    if (
         str(
             config.snapshot_config_with_pending(config.app).get("llm_provider", "")
             or ""
@@ -3874,7 +4421,7 @@ def _render_loomloom_run_progress():
 
 def _render_loomloom_script_generation(params):
     st.caption(tr("LoomLoom Batch Script Generation Help"))
-    effective_token = _render_loomloom_api_token_input()
+    effective_token = _effective_loomloom_api_token()
     if not effective_token:
         st.warning(tr("Shengsuan Cloud API Key Required"))
 
@@ -4059,12 +4606,35 @@ def _render_script_settings(panel, params):
     with panel:
         with st.container(border=True):
             st.write(tr("Video Script Settings"))
-            params.video_subject = st.text_area(
-                tr("Video Subject"),
-                placeholder=tr("Video Subject Placeholder"),
-                height=96,
-                key="video_subject",
-            ).strip()
+            # 标签行需要容纳“配置大模型”入口，因此无法继续使用 text_area
+            # 内置标签。把标签和输入框收进同一个字段容器后，可覆盖内部间距，
+            # 同时让该字段与页面上的其它表单控件保持一致的外部节奏。
+            with st.container(key="video_subject_field"):
+                with st.container(
+                    key="video_subject_label_row",
+                    horizontal=True,
+                    vertical_alignment="center",
+                    gap="small",
+                ):
+                    st.markdown(
+                        tr("Video Subject"),
+                        help=tr("Video Subject Help"),
+                        width="content",
+                    )
+                    st.button(
+                        tr("Configure LLM"),
+                        key="open_llm_settings_from_subject",
+                        type="tertiary",
+                        on_click=_open_settings_dialog,
+                        args=("llm",),
+                    )
+                params.video_subject = st.text_area(
+                    tr("Video Subject"),
+                    placeholder=tr("Video Subject Placeholder"),
+                    height=96,
+                    key="video_subject",
+                    label_visibility="collapsed",
+                ).strip()
 
             video_languages = [
                 (tr("Auto Detect"), ""),
@@ -4224,17 +4794,20 @@ def _render_script_settings(panel, params):
 def _render_video_settings(panel, params):
     """渲染视频设置并返回本次选择的本地素材。"""
     uploaded_files = []
-    video_sources = [
-        (tr("Pexels"), "pexels"),
-        (tr("Pixabay"), "pixabay"),
-        (tr("Coverr"), "coverr"),
-        (tr("WaveSpeed AI Video"), "wavespeed"),
-        (tr("Volcano Engine Seedance"), "volcengine_seedance"),
-        (tr("Shengsuan Cloud AI Video"), "loomloom"),
-        (tr("Local file"), "local"),
-    ]
-    saved_video_source_name = config.app.get("video_source", "pexels")
-    video_source_label = dict((v, label) for label, v in video_sources).get(
+    video_source_labels = {
+        "pexels": tr("Pexels"),
+        "pixabay": tr("Pixabay"),
+        "coverr": tr("Coverr"),
+        "wavespeed": tr("WaveSpeed AI Video"),
+        "volcengine_seedance": tr("Volcano Engine Seedance"),
+        "ofox": tr("OFox AI Video"),
+        "metaso_minimax": tr("Metaso MiniMax H3"),
+        "loomloom": tr("Shengsuan Cloud AI Video"),
+        "openai_image": tr("OpenAI Compatible Text-to-Image"),
+        "local": tr("Local file"),
+    }
+    saved_video_source_name = str(config.app.get("video_source", "pexels") or "pexels")
+    video_source_label = video_source_labels.get(
         saved_video_source_name, saved_video_source_name
     )
     # P2 do critique: resumo do accordion só mostrava 1 valor. Fonte + proporção
@@ -4277,14 +4850,19 @@ def _render_video_settings(panel, params):
             ]
 
             with source_tab:
-                params.video_source = stable_selectbox(
+                params.video_source = grouped_selectbox(
                     tr("Video Source"),
-                    options=[value for _, value in video_sources],
+                    groups=(
+                        (tr("Stock Video"), VIDEO_SOURCE_GROUPS["stock_video"]),
+                        (tr("AI Video"), VIDEO_SOURCE_GROUPS["ai_video"]),
+                        (tr("AI Image"), VIDEO_SOURCE_GROUPS["ai_image"]),
+                        (tr("Local Material"), VIDEO_SOURCE_GROUPS["local"]),
+                    ),
                     default_value=saved_video_source_name,
                     key="video_source_select",
-                    format_func=lambda value: dict(
-                        (v, label) for label, v in video_sources
-                    )[value],
+                    format_func=video_source_labels.get,
+                    settings_label=tr("Configure Material Sources"),
+                    on_settings=_open_material_settings_dialog,
                 )
                 _set_runtime_config("app", "video_source", params.video_source)
 
@@ -4292,6 +4870,10 @@ def _render_video_settings(panel, params):
                     st.caption(tr("WaveSpeed AI Video Help"))
                 if params.video_source == "volcengine_seedance":
                     st.caption(tr("Volcano Engine Seedance Help"))
+                if params.video_source == "ofox":
+                    st.caption(tr("OFox AI Video Help"))
+                if params.video_source == "metaso_minimax":
+                    st.caption(tr("Metaso MiniMax H3 Help"))
 
                 if params.video_source == "local":
                     # Streamlit 的文件类型校验对扩展名大小写敏感，这里同时放行大小写两种形式。
@@ -4435,12 +5017,25 @@ def _render_video_settings(panel, params):
                     "ui", "video_fit_mode", params.video_fit_mode.value
                 )
 
-                video_clip_durations = [2, 3, 4, 5, 6, 7, 8, 9, 10]
+                # MiniMax H3 的远端时长范围是 4～15 秒。选择秘塔时使用完整能力
+                # 范围，既避免 2/3 秒被按 4 秒计费，也让 WebUI 与 CLI、服务层一致。
+                video_clip_durations = (
+                    list(
+                        range(
+                            metaso_minimax.DEFAULT_MIN_DURATION_SECONDS,
+                            metaso_minimax.DEFAULT_MAX_DURATION_SECONDS + 1,
+                        )
+                    )
+                    if params.video_source == "metaso_minimax"
+                    else [2, 3, 4, 5, 6, 7, 8, 9, 10]
+                )
                 params.video_clip_duration = stable_selectbox(
                     tr("Clip Duration"),
                     options=video_clip_durations,
                     default_value=_saved_ui_choice(
-                        "video_clip_duration", video_clip_durations, 3
+                        "video_clip_duration",
+                        video_clip_durations,
+                        5 if params.video_source == "metaso_minimax" else 3,
                     ),
                     key="video_clip_duration_select",
                     help=tr("Clip Duration Help"),
@@ -4525,6 +5120,10 @@ def _render_video_settings(panel, params):
                     _render_wavespeed_video_settings(params)
                 if params.video_source == "volcengine_seedance":
                     _render_seedance_video_settings(params)
+                if params.video_source == "ofox":
+                    _render_ofox_video_settings(params)
+                if params.video_source == "metaso_minimax":
+                    _render_metaso_minimax_video_settings(params)
     return uploaded_files
 
 
@@ -4583,6 +5182,84 @@ def _render_seedance_video_settings(params):
         tr("Confirm Volcano Engine Seedance Charge"),
         key="volcengine_seedance_confirm_charge",
         help=tr("Confirm Volcano Engine Seedance Charge Help"),
+    )
+
+
+def _render_ofox_video_settings(params):
+    """展示预计付费任务数量，并要求用户明确确认 OFox 生成费用。"""
+    clip_duration = max(int(params.video_clip_duration or 1), 1)
+    video_count = max(int(params.video_count or 1), 1)
+    estimated_range = _estimate_voiceover_duration_range(
+        str(params.video_script or ""), params.voice_rate
+    )
+    if estimated_range:
+        min_clips = max(math.ceil(estimated_range[0] * video_count / clip_duration), 1)
+        max_clips = max(
+            math.ceil(estimated_range[1] * video_count / clip_duration), min_clips
+        )
+        st.warning(
+            tr("OFox Billing Notice").format(min=min_clips, max=max_clips)
+        )
+    else:
+        st.warning(tr("OFox Billing Notice Without Script"))
+    st.checkbox(
+        tr("Confirm OFox Charge"),
+        key="ofox_confirm_charge",
+        help=tr("Confirm OFox Charge Help"),
+    )
+
+
+def _render_metaso_minimax_video_settings(params):
+    """展示预计付费任务数量，并要求用户确认秘塔 MiniMax 生成费用。"""
+    clip_duration = max(int(params.video_clip_duration or 1), 1)
+    video_count = max(int(params.video_count or 1), 1)
+    voice_mode = st.session_state.get(
+        localized_widget_key("voice_mode_control"),
+        config.ui.get("voice_mode"),
+    )
+    if voice_mode == VOICE_MODE_UPLOAD:
+        # 视频设置渲染在音频设置之前，此时无法可靠读取本轮新上传文件的实际
+        # 时长。上传模式不再展示按脚本文字推算的数字，避免用户误以为一个
+        # 5 秒音频也会按较长文案创建多个付费任务；运行时仍以文件真实时长为准。
+        st.warning(
+            tr("Metaso MiniMax Billing Notice Uploaded Audio").format(
+                resolution=str(
+                    config.app.get(
+                        "metaso_minimax_resolution",
+                        metaso_minimax.DEFAULT_RESOLUTION,
+                    )
+                    or metaso_minimax.DEFAULT_RESOLUTION
+                ),
+                duration=clip_duration,
+                count=video_count,
+            )
+        )
+    elif estimated_range := _estimate_voiceover_duration_range(
+        str(params.video_script or ""), params.voice_rate
+    ):
+        min_clips = max(math.ceil(estimated_range[0] * video_count / clip_duration), 1)
+        max_clips = max(
+            math.ceil(estimated_range[1] * video_count / clip_duration), min_clips
+        )
+        st.warning(
+            tr("Metaso MiniMax Billing Notice").format(
+                min=min_clips,
+                max=max_clips,
+                resolution=str(
+                    config.app.get(
+                        "metaso_minimax_resolution",
+                        metaso_minimax.DEFAULT_RESOLUTION,
+                    )
+                    or metaso_minimax.DEFAULT_RESOLUTION
+                ),
+            )
+        )
+    else:
+        st.warning(tr("Metaso MiniMax Billing Notice Without Script"))
+    st.checkbox(
+        tr("Confirm Metaso MiniMax Charge"),
+        key="metaso_minimax_confirm_charge",
+        help=tr("Confirm Metaso MiniMax Charge Help"),
     )
 
 
@@ -6578,7 +7255,10 @@ def _render_generation_controls(
             "coverr",
             "wavespeed",
             "volcengine_seedance",
+            "ofox",
+            "metaso_minimax",
             "loomloom",
+            "openai_image",
             "local",
         ]:
             _remove_active_generation_task(task_id)
@@ -6634,6 +7314,43 @@ def _render_generation_controls(
         ):
             _remove_active_generation_task(task_id)
             st.error(tr("Confirm Volcano Engine Seedance Charge Required"))
+            st.stop()
+
+        if params.video_source == "ofox" and not (
+            ofox.is_enabled(config.snapshot_config_with_pending(config.app))
+        ):
+            _remove_active_generation_task(task_id)
+            st.error(tr("Please Enter the OFox API Key"))
+            st.stop()
+
+        if params.video_source == "ofox" and not st.session_state.get(
+            "ofox_confirm_charge", False
+        ):
+            _remove_active_generation_task(task_id)
+            st.error(tr("Confirm OFox Charge Required"))
+            st.stop()
+
+        if params.video_source == "metaso_minimax" and not (
+            metaso_minimax.is_enabled(
+                config.snapshot_config_with_pending(config.app)
+            )
+        ):
+            _remove_active_generation_task(task_id)
+            st.error(tr("Please Enter the Metaso MiniMax API Key"))
+            st.stop()
+
+        if params.video_source == "metaso_minimax" and not st.session_state.get(
+            "metaso_minimax_confirm_charge", False
+        ):
+            _remove_active_generation_task(task_id)
+            st.error(tr("Confirm Metaso MiniMax Charge Required"))
+            st.stop()
+
+        if params.video_source == "openai_image" and not material.is_openai_image_enabled(
+            config.snapshot_config_with_pending(config.app)
+        ):
+            _remove_active_generation_task(task_id)
+            st.error(tr("Please Configure the OpenAI Image Source"))
             st.stop()
 
         loomloom_video_request = None
@@ -6792,11 +7509,11 @@ def _render_generation_controls(
         ):
             # 当用户没有重新上传文件时，复用最近一次已经保存到磁盘的本地素材列表。
             params.video_materials = []
-            for material in st.session_state["local_video_materials"]:
+            for material_entry in st.session_state["local_video_materials"]:
                 m = MaterialInfo()
-                m.provider = material.get("provider", "local")
-                m.url = material.get("url", "")
-                m.duration = material.get("duration", 0)
+                m.provider = material_entry.get("provider", "local")
+                m.url = material_entry.get("url", "")
+                m.duration = material_entry.get("duration", 0)
                 if m.url:
                     params.video_materials.append(m)
 

@@ -19,12 +19,12 @@ def _widget_by_key(elements, key):
     )
 
 
-def test_seedance_source_requires_confirmation_then_submits_without_secret_in_params():
+def test_ofox_source_requires_confirmation_then_submits_without_secret_in_params():
     test_config = dict(
         config.app,
         llm_provider="openai",
         video_source="pexels",
-        volcengine_seedance_api_key="ark-secret",
+        ofox_api_key="ofox-secret",
     )
     with (
         patch.object(config, "app", test_config),
@@ -42,20 +42,18 @@ def test_seedance_source_requires_confirmation_then_submits_without_secret_in_pa
         _widget_by_key(app.text_area, "video_terms").set_value(
             "office worker, AI assistant"
         ).run()
-        app.session_state["video_source_select_en"] = "volcengine_seedance"
+        app.session_state["video_source_select_en"] = "ofox"
         app.run()
 
         _widget_by_key(app.button, "generate_video_button").click().run()
         assert submit_generation.call_count == 0
         assert any("confirm" in str(item.value).lower() for item in app.error)
 
-        _widget_by_key(
-            app.checkbox, "volcengine_seedance_confirm_charge"
-        ).check().run()
+        _widget_by_key(app.checkbox, "ofox_confirm_charge").check().run()
         _widget_by_key(app.button, "generate_video_button").click().run()
 
         assert submit_generation.call_count == 1
         submitted_params = submit_generation.call_args.kwargs["params"]
-        assert submitted_params.video_source == "volcengine_seedance"
-        assert "ark-secret" not in submitted_params.model_dump_json()
+        assert submitted_params.video_source == "ofox"
+        assert "ofox-secret" not in submitted_params.model_dump_json()
         assert [str(item.value) for item in app.exception] == []
