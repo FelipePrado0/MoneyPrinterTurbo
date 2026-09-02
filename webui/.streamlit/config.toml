@@ -1,4 +1,9 @@
 [theme]
+# Definir qualquer chave em [theme] faz o Streamlit parar de seguir o tema do
+# SO/navegador e cair no padrão "light", mesmo sem essa chave existir antes.
+# base="dark" restaura o escuro como padrão (comportamento anterior a este
+# arquivo ganhar uma seção [theme]).
+base = "dark"
 # Vermelho padrão do Streamlit (#FF4B4B) só dá 3.3:1 de contraste com texto
 # branco nos botões primários, abaixo do WCAG AA (4.5:1). Este tom (Material
 # red 700) mantém a identidade vermelha e passa em ~4.97:1.
