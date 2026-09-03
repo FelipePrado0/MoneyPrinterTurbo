@@ -41,11 +41,6 @@ def _connect(db_path: str | None) -> sqlite3.Connection:
             generate_at REAL NOT NULL,
             video_subject TEXT NOT NULL,
             params_json TEXT NOT NULL,
-            youtube_title TEXT NOT NULL DEFAULT '',
-            youtube_description TEXT NOT NULL DEFAULT '',
-            youtube_tags_json TEXT NOT NULL DEFAULT '[]',
-            youtube_publish_offset_hours REAL NOT NULL DEFAULT 0,
-            youtube_review_required INTEGER NOT NULL DEFAULT 0,
             status TEXT NOT NULL DEFAULT 'pending',
             task_id TEXT,
             error TEXT,
@@ -68,11 +63,6 @@ def _row_to_dict(row: tuple) -> dict:
         generate_at,
         video_subject,
         params_json,
-        youtube_title,
-        youtube_description,
-        youtube_tags_json,
-        youtube_publish_offset_hours,
-        youtube_review_required,
         status,
         task_id,
         error,
@@ -84,11 +74,6 @@ def _row_to_dict(row: tuple) -> dict:
         "generate_at": datetime.fromtimestamp(generate_at),
         "video_subject": video_subject,
         "params": json.loads(params_json),
-        "youtube_title": youtube_title,
-        "youtube_description": youtube_description,
-        "youtube_tags": json.loads(youtube_tags_json),
-        "youtube_publish_offset_hours": youtube_publish_offset_hours,
-        "youtube_review_required": bool(youtube_review_required),
         "status": status,
         "task_id": task_id,
         "error": error,
@@ -97,20 +82,14 @@ def _row_to_dict(row: tuple) -> dict:
 
 
 _SELECT_COLUMNS = (
-    "id, group_id, generate_at, video_subject, params_json, youtube_title, "
-    "youtube_description, youtube_tags_json, youtube_publish_offset_hours, "
-    "youtube_review_required, status, task_id, error, created_at"
+    "id, group_id, generate_at, video_subject, params_json, "
+    "status, task_id, error, created_at"
 )
 
 
 def create_schedule(
     occurrences: list[dict],
     params: dict,
-    youtube_title: str = "",
-    youtube_description: str = "",
-    youtube_tags: list[str] | None = None,
-    youtube_publish_offset_hours: float = 0.0,
-    youtube_review_required: bool = False,
     db_path: str | None = None,
 ) -> str:
     """Persist a batch of occurrences sharing one recurrence rule.
@@ -119,8 +98,9 @@ def create_schedule(
     ``{"generate_at": datetime, "video_subject": str}`` dicts (see
     ``schedule_rules.expand_occurrences``); each becomes its own row so a
     partial failure or a per-occurrence cancel never touches the others.
-    ``params`` is the base ``VideoParams`` payload used for generation; its
-    ``video_subject`` is overridden per row from the occurrence.
+    ``params`` is the base ``VideoParams`` payload used for generation
+    (YouTube publish overrides included, same as any other generation);
+    its ``video_subject`` is overridden per row from the occurrence.
     Returns the new ``group_id``.
     """
     if not occurrences:
@@ -128,7 +108,6 @@ def create_schedule(
 
     group_id = uuid4().hex
     created_at = time.time()
-    tags_json = json.dumps(list(youtube_tags or []), ensure_ascii=False)
 
     with closing(_connect(db_path)) as conn:
         for occurrence in occurrences:
@@ -138,21 +117,14 @@ def create_schedule(
                 """
                 INSERT INTO schedule_occurrences (
                     group_id, generate_at, video_subject, params_json,
-                    youtube_title, youtube_description, youtube_tags_json,
-                    youtube_publish_offset_hours, youtube_review_required,
                     status, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
                     group_id,
                     occurrence["generate_at"].timestamp(),
                     occurrence["video_subject"],
                     json.dumps(occurrence_params, ensure_ascii=False),
-                    youtube_title,
-                    youtube_description,
-                    tags_json,
-                    youtube_publish_offset_hours,
-                    int(youtube_review_required),
                     STATUS_PENDING,
                     created_at,
                 ),
@@ -182,18 +154,45 @@ def list_occurrences(
     return [_row_to_dict(row) for row in rows]
 
 
-def get_due_occurrences(now: datetime, db_path: str | None = None) -> list[dict]:
-    """Pending occurrences whose generate_at has already passed."""
+def claim_due_occurrences(
+    now: datetime, task_id_factory, db_path: str | None = None
+) -> list[dict]:
+    """Atomically claim every pending occurrence whose generate_at has passed.
+
+    Each row is flipped ``pending`` -> ``dispatched`` (with a fresh task_id
+    from ``task_id_factory``) inside the same conditional ``UPDATE`` that
+    reads it, so two poll ticks (or two processes sharing this sqlite file)
+    can never both claim the same occurrence: the second ``UPDATE`` finds
+    the row no longer ``pending`` and affects zero rows. Replaces the old
+    read-then-dispatch-later split, which raced whenever the dispatch pool
+    fell behind the poll interval.
+    """
+    claimed: list[dict] = []
     with closing(_connect(db_path)) as conn:
         rows = conn.execute(
             f"SELECT {_SELECT_COLUMNS} FROM schedule_occurrences "
             "WHERE status = ? AND generate_at <= ? ORDER BY generate_at ASC",
             (STATUS_PENDING, now.timestamp()),
         ).fetchall()
-    return [_row_to_dict(row) for row in rows]
+        for row in rows:
+            occurrence = _row_to_dict(row)
+            task_id = task_id_factory()
+            cursor = conn.execute(
+                "UPDATE schedule_occurrences SET status = ?, task_id = ? "
+                "WHERE id = ? AND status = ?",
+                (STATUS_DISPATCHED, task_id, occurrence["id"], STATUS_PENDING),
+            )
+            if cursor.rowcount:
+                occurrence["status"] = STATUS_DISPATCHED
+                occurrence["task_id"] = task_id
+                claimed.append(occurrence)
+        conn.commit()
+    return claimed
 
 
 def mark_dispatched(occurrence_id: int, task_id: str, db_path: str | None = None) -> None:
+    """Unconditional dispatch mark, for tests/tooling. The poller itself uses
+    ``claim_due_occurrences``'s conditional UPDATE instead, to stay atomic."""
     with closing(_connect(db_path)) as conn:
         conn.execute(
             "UPDATE schedule_occurrences SET status = ?, task_id = ? WHERE id = ?",

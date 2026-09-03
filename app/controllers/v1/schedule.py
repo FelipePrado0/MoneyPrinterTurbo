@@ -20,11 +20,6 @@ def _serialize_occurrence(occurrence: dict) -> dict:
         "group_id": occurrence["group_id"],
         "generate_at": occurrence["generate_at"].isoformat(),
         "video_subject": occurrence["video_subject"],
-        "youtube_title": occurrence["youtube_title"],
-        "youtube_description": occurrence["youtube_description"],
-        "youtube_tags": occurrence["youtube_tags"],
-        "youtube_publish_offset_hours": occurrence["youtube_publish_offset_hours"],
-        "youtube_review_required": occurrence["youtube_review_required"],
         "status": occurrence["status"],
         "task_id": occurrence["task_id"],
         "error": occurrence["error"],
@@ -53,11 +48,6 @@ def create_schedule(request: Request, body: CreateScheduleRequest):
     group_id = schedule_store.create_schedule(
         occurrences=occurrences,
         params=body.params.model_dump(),
-        youtube_title=body.youtube_title,
-        youtube_description=body.youtube_description,
-        youtube_tags=body.youtube_tags,
-        youtube_publish_offset_hours=body.youtube_publish_offset_hours,
-        youtube_review_required=body.youtube_review_required,
     )
     return utils.get_response(200, {"group_id": group_id, "count": len(occurrences)})
 

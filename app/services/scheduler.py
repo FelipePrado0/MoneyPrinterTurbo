@@ -28,13 +28,18 @@ _stop_event = threading.Event()
 
 
 def _dispatch_occurrence(occurrence: dict) -> None:
-    """Build VideoParams from a stored occurrence and run the normal pipeline.
+    """Build VideoParams from an already-claimed occurrence and run the pipeline.
 
-    ``mark_dispatched`` always runs before ``task.start()``: the pipeline can
-    take minutes, and the next poll tick must never see this occurrence as
-    still-pending and submit it a second time.
+    The occurrence was already flipped to ``dispatched`` atomically in
+    ``schedule_store.claim_due_occurrences``, before this ever reaches the
+    executor: no risk of a later poll tick re-claiming and re-submitting it.
+    YouTube publish overrides (title/description/tags/offset/review) are
+    whatever the base ``VideoParams`` already carried at schedule-creation
+    time, same as any other generation; nothing schedule-specific to apply
+    here.
     """
     occurrence_id = occurrence["id"]
+    task_id = occurrence["task_id"]
     try:
         params = VideoParams(**occurrence["params"])
     except Exception as exc:
@@ -45,17 +50,6 @@ def _dispatch_occurrence(occurrence: dict) -> None:
         schedule_store.mark_failed(occurrence_id, str(exc))
         return
 
-    if occurrence["youtube_title"]:
-        params.youtube_title_override = occurrence["youtube_title"]
-    if occurrence["youtube_description"]:
-        params.youtube_description_override = occurrence["youtube_description"]
-    if occurrence["youtube_tags"]:
-        params.youtube_tags_override = list(occurrence["youtube_tags"])
-    params.youtube_publish_offset_hours = occurrence["youtube_publish_offset_hours"]
-    params.youtube_review_required = occurrence["youtube_review_required"]
-
-    task_id = uuid4().hex
-    schedule_store.mark_dispatched(occurrence_id, task_id=task_id)
     logger.info(
         f"dispatching scheduled video: occurrence_id={occurrence_id}, "
         f"task_id={task_id}, subject={params.video_subject!r}"
@@ -72,12 +66,14 @@ def _dispatch_occurrence(occurrence: dict) -> None:
 
 def _poll_once() -> None:
     try:
-        due = schedule_store.get_due_occurrences(now=datetime.now())
+        claimed = schedule_store.claim_due_occurrences(
+            now=datetime.now(), task_id_factory=lambda: uuid4().hex
+        )
     except Exception as exc:
         logger.exception(f"failed to poll schedule occurrences: {exc}")
         return
 
-    for occurrence in due:
+    for occurrence in claimed:
         _dispatch_executor.submit(_dispatch_occurrence, occurrence)
 
 

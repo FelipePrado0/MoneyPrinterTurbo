@@ -576,12 +576,13 @@ class ScheduleOccurrenceInput(BaseModel):
 
 class CreateScheduleRequest(BaseModel):
     """Corpo de criação de agendamento: ocorrências já resolvidas pela WebUI
-    (regra recorrente + exceções + datas extras já aplicadas no cliente)."""
+    (regra recorrente + exceções + datas extras já aplicadas no cliente).
+
+    Publicação no YouTube (título/descrição/tags override, atraso de
+    publicação, revisão obrigatória) não é um conceito de agendamento: já
+    vive em ``VideoParams`` e vale igual pra geração imediata ou agendada,
+    por isso não tem campo próprio aqui, vem de ``params``.
+    """
 
     occurrences: List[ScheduleOccurrenceInput] = Field(min_length=1)
     params: VideoParams
-    youtube_title: str = ""
-    youtube_description: str = ""
-    youtube_tags: Optional[List[str]] = None
-    youtube_publish_offset_hours: float = Field(default=0.0, ge=0)
-    youtube_review_required: bool = False

@@ -49,27 +49,7 @@ def test_create_schedule_stores_per_occurrence_subject(db_path):
     assert [row["video_subject"] for row in rows] == ["Assunto A", "Assunto B"]
 
 
-def test_create_schedule_stores_youtube_overrides(db_path):
-    schedule_store.create_schedule(
-        occurrences=[_occurrence(datetime(2026, 3, 5, 9, 0))],
-        params=BASE_PARAMS,
-        youtube_title="Título fixo",
-        youtube_description="Descrição fixa",
-        youtube_tags=["tag1", "tag2"],
-        youtube_publish_offset_hours=2.5,
-        youtube_review_required=True,
-        db_path=db_path,
-    )
-
-    row = schedule_store.list_occurrences(db_path=db_path)[0]
-    assert row["youtube_title"] == "Título fixo"
-    assert row["youtube_description"] == "Descrição fixa"
-    assert row["youtube_tags"] == ["tag1", "tag2"]
-    assert row["youtube_publish_offset_hours"] == 2.5
-    assert row["youtube_review_required"] is True
-
-
-def test_get_due_occurrences_only_returns_past_pending_rows(db_path):
+def test_claim_due_occurrences_only_claims_past_pending_rows(db_path):
     past = datetime(2026, 3, 5, 9, 0)
     future = datetime(2026, 3, 20, 9, 0)
     schedule_store.create_schedule(
@@ -78,23 +58,38 @@ def test_get_due_occurrences_only_returns_past_pending_rows(db_path):
         db_path=db_path,
     )
 
-    due = schedule_store.get_due_occurrences(now=datetime(2026, 3, 6), db_path=db_path)
-    assert len(due) == 1
-    assert due[0]["video_subject"] == "Café todo dia"
+    claimed = schedule_store.claim_due_occurrences(
+        now=datetime(2026, 3, 6), task_id_factory=lambda: "task-1", db_path=db_path
+    )
+    assert len(claimed) == 1
+    assert claimed[0]["video_subject"] == "Café todo dia"
+    assert claimed[0]["status"] == "dispatched"
+    assert claimed[0]["task_id"] == "task-1"
+
+    row = schedule_store.list_occurrences(db_path=db_path, status="pending")
+    assert len(row) == 1
+    assert row[0]["video_subject"] == "Café todo dia"  # a futura, ainda pending
 
 
-def test_get_due_occurrences_skips_already_dispatched(db_path):
+def test_claim_due_occurrences_never_claims_the_same_row_twice(db_path):
+    """Simula dois poll ticks (ou dois processos) disputando a mesma
+    ocorrencia due: so o primeiro claim pode vencer."""
     past = datetime(2026, 3, 5, 9, 0)
-    group_id = schedule_store.create_schedule(
+    schedule_store.create_schedule(
         occurrences=[_occurrence(past)], params=BASE_PARAMS, db_path=db_path
     )
-    occurrence_id = schedule_store.list_occurrences(db_path=db_path)[0]["id"]
-    schedule_store.mark_dispatched(occurrence_id, task_id="task-1", db_path=db_path)
 
-    due = schedule_store.get_due_occurrences(now=datetime(2026, 3, 6), db_path=db_path)
-    assert due == []
+    first = schedule_store.claim_due_occurrences(
+        now=datetime(2026, 3, 6), task_id_factory=lambda: "task-1", db_path=db_path
+    )
+    second = schedule_store.claim_due_occurrences(
+        now=datetime(2026, 3, 6), task_id_factory=lambda: "task-2", db_path=db_path
+    )
 
-    row = schedule_store.list_occurrences(group_id=group_id, db_path=db_path)[0]
+    assert len(first) == 1
+    assert second == []
+
+    row = schedule_store.list_occurrences(db_path=db_path)[0]
     assert row["status"] == "dispatched"
     assert row["task_id"] == "task-1"
 
