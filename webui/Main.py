@@ -6961,6 +6961,7 @@ def _open_schedule_dialog():
 
 def _dismiss_schedule_dialog():
     st.session_state["schedule_dialog_open"] = False
+    st.session_state["schedule_extra_dates"] = []
 
 
 def _compose_schedule_occurrences(
@@ -7006,6 +7007,19 @@ def _render_schedule_dialog(base_params: VideoParams):
     )
     time_of_day = time_col.time_input(tr("Schedule Time"), key="schedule_time")
 
+    # Fila de temas: sempre a mesma UI (editor de lista) pra "once" e pra
+    # recorrente. Espia o tamanho já editado numa interação anterior (o
+    # widget ainda vai ser desenhado mais abaixo): decide aqui se o modo
+    # "Parar por quantidade/data" faz sentido, porque com mais de 1 tema a
+    # quantidade de ocorrências é sempre ditada pelo tamanho da fila, não
+    # por count/date.
+    default_topics = [{"tema": base_params.video_subject or ""}]
+    topics_count_peek = (
+        len(st.session_state.get("schedule_topics_editor", default_topics))
+        if interval_type != "once"
+        else 1
+    )
+
     interval_step = 1
     end_mode = "count"
     occurrence_count = 1
@@ -7018,61 +7032,54 @@ def _render_schedule_dialog(base_params: VideoParams):
         )
         unit_col.write(f"\n{tr(_SCHEDULE_INTERVAL_UNIT_KEYS[interval_type])}")
 
-        end_mode = st.radio(
-            tr("Schedule End Mode"),
-            options=["count", "date"],
-            format_func=lambda value: tr(
-                "Schedule End By Count" if value == "count" else "Schedule End By Date"
-            ),
-            key="schedule_end_mode",
-            horizontal=True,
-        )
-        if end_mode == "count":
-            occurrence_count = st.number_input(
-                tr("Schedule Occurrence Count"),
-                min_value=1,
-                max_value=schedule_rules.MAX_OCCURRENCES,
-                value=5,
-                step=1,
-                key="schedule_occurrence_count",
-            )
+        if topics_count_peek > 1:
+            st.caption(tr("Schedule End Mode Overridden By List"))
         else:
-            end_date = st.date_input(tr("Schedule End Date"), key="schedule_end_date")
+            end_mode = st.radio(
+                tr("Schedule End Mode"),
+                options=["count", "date"],
+                format_func=lambda value: tr(
+                    "Schedule End By Count" if value == "count" else "Schedule End By Date"
+                ),
+                key="schedule_end_mode",
+                horizontal=True,
+            )
+            if end_mode == "count":
+                occurrence_count = st.number_input(
+                    tr("Schedule Occurrence Count"),
+                    min_value=1,
+                    max_value=schedule_rules.MAX_OCCURRENCES,
+                    value=5,
+                    step=1,
+                    key="schedule_occurrence_count",
+                )
+            else:
+                end_date = st.date_input(tr("Schedule End Date"), key="schedule_end_date")
 
     st.divider()
 
-    subject_mode = "same"
-    subjects: list[str] | None = None
-    if interval_type == "once":
-        video_subject = st.text_input(
-            tr("Video Subject"), value=base_params.video_subject or ""
-        )
-    else:
-        subject_mode = st.radio(
-            tr("Schedule Subject Mode"),
-            options=["same", "list"],
-            format_func=lambda value: tr(
-                "Schedule Same Subject" if value == "same" else "Schedule Subject List"
-            ),
-            key="schedule_subject_mode",
-            horizontal=True,
-        )
-        if subject_mode == "same":
-            video_subject = st.text_input(
-                tr("Video Subject"), value=base_params.video_subject or ""
-            )
-        else:
-            video_subject = base_params.video_subject or ""
-            subject_list_text = st.text_area(
-                tr("Schedule Subject List"),
-                placeholder=tr("Schedule Subject List Placeholder"),
-                key="schedule_subject_list_text",
-            )
-            subjects = [
-                line.strip()
-                for line in subject_list_text.splitlines()
-                if line.strip()
-            ]
+    # Fila de temas: 1 linha = mesmo tema repetido pelas ocorrências; várias
+    # linhas = um tema por ocorrência, na ordem. Substitui o antigo toggle
+    # "mesmo assunto / lista de assuntos", que perdia o texto digitado ao
+    # trocar de modo.
+    st.caption(tr("Schedule Topics Help"))
+    topics_editor_value = st.data_editor(
+        default_topics,
+        num_rows="dynamic",
+        key="schedule_topics_editor",
+        column_config={
+            "tema": st.column_config.TextColumn(tr("Video Subject"), required=True)
+        },
+        use_container_width=True,
+        hide_index=True,
+    )
+    subjects = [
+        (row.get("tema") or "").strip()
+        for row in topics_editor_value
+        if (row.get("tema") or "").strip()
+    ] or [base_params.video_subject or ""]
+    multi_topic = len(subjects) > 1
+    video_subject = subjects[0]
 
     # --- calcula a prévia de datas a partir do que já foi preenchido acima ---
     expand_kwargs = dict(
@@ -7082,7 +7089,7 @@ def _render_schedule_dialog(base_params: VideoParams):
         interval_step=interval_step,
     )
     if interval_type != "once":
-        if subjects:
+        if multi_topic:
             expand_kwargs["occurrence_count"] = len(subjects)
         elif end_mode == "count":
             expand_kwargs["occurrence_count"] = occurrence_count
@@ -7091,8 +7098,11 @@ def _render_schedule_dialog(base_params: VideoParams):
 
     preview_error = None
     base_dates: list[datetime] = []
-    if subject_mode == "list" and not subjects:
-        preview_error = None  # ainda digitando a lista; não é erro
+    if interval_type == "once" and multi_topic:
+        # "Uma vez" sempre gera 1 ocorrência via expand_occurrences; com fila
+        # de N temas, queremos N ocorrências no mesmo instante (N vídeos
+        # gerados juntos), não N chamadas separadas à regra de recorrência.
+        base_dates = [datetime.combine(start_date, time_of_day)] * len(subjects)
     else:
         try:
             base_dates = schedule_rules.expand_occurrences(**expand_kwargs)
@@ -7106,35 +7116,48 @@ def _render_schedule_dialog(base_params: VideoParams):
     elif not base_dates:
         st.info(tr("Schedule Preview Empty"))
     else:
-        excluded_labels = st.multiselect(
-            tr("Schedule Exclude Dates"),
-            options=[dt.strftime("%Y-%m-%d %H:%M") for dt in base_dates],
-            key="schedule_excluded_dates",
-        )
-        with st.expander(tr("Schedule Add Extra Date")):
-            extra_cols = st.columns([1, 1, 2])
-            extra_date = extra_cols[0].date_input(
-                tr("Schedule Extra Date"), key="schedule_extra_date"
+        # "Uma vez" tem exatamente 1 ocorrência: não existe regra pra excluir
+        # datas dela, nem sentido em "adicionar data extra" a algo que é,
+        # por definição, uma vez só.
+        if interval_type == "once":
+            excluded_labels: list[str] = []
+        else:
+            excluded_labels = st.multiselect(
+                tr("Schedule Exclude Dates"),
+                options=[dt.strftime("%Y-%m-%d %H:%M") for dt in base_dates],
+                key="schedule_excluded_dates",
             )
-            extra_time = extra_cols[1].time_input(
-                tr("Schedule Extra Time"), key="schedule_extra_time"
-            )
-            extra_subject = extra_cols[2].text_input(
-                tr("Schedule Extra Subject"), key="schedule_extra_subject"
-            )
-            if st.button(tr("Schedule Add Date Button"), key="schedule_add_extra_date"):
-                extra_dates = st.session_state.setdefault("schedule_extra_dates", [])
-                extra_dates.append(
-                    {
-                        "generate_at": datetime.combine(extra_date, extra_time),
-                        "video_subject": extra_subject.strip() or video_subject,
-                    }
+            with st.expander(tr("Schedule Add Extra Date")):
+                extra_cols = st.columns([1, 1, 2])
+                extra_date = extra_cols[0].date_input(
+                    tr("Schedule Extra Date"), key="schedule_extra_date"
                 )
-                st.rerun()
+                extra_time = extra_cols[1].time_input(
+                    tr("Schedule Extra Time"), key="schedule_extra_time"
+                )
+                extra_subject = extra_cols[2].text_input(
+                    tr("Schedule Extra Subject"), key="schedule_extra_subject"
+                )
+                if st.button(tr("Schedule Add Date Button"), key="schedule_add_extra_date"):
+                    extra_dates = st.session_state.setdefault("schedule_extra_dates", [])
+                    extra_dates.append(
+                        {
+                            "generate_at": datetime.combine(extra_date, extra_time),
+                            "video_subject": extra_subject.strip() or video_subject,
+                        }
+                    )
+                    st.rerun()
 
-        extra_dates = st.session_state.get("schedule_extra_dates", [])
+        extra_dates = (
+            [] if interval_type == "once"
+            else st.session_state.get("schedule_extra_dates", [])
+        )
         final_occurrences = _compose_schedule_occurrences(
-            base_dates, subjects, excluded_labels, extra_dates, video_subject
+            base_dates,
+            subjects if multi_topic else None,
+            excluded_labels,
+            extra_dates,
+            video_subject,
         )
 
         for index, occurrence in enumerate(final_occurrences):
@@ -7149,22 +7172,6 @@ def _render_schedule_dialog(base_params: VideoParams):
                 extra_dates.remove(occurrence)
                 st.rerun()
 
-        st.divider()
-        st.write(f"**{tr('Schedule Youtube Section')}**")
-        publish_offset_hours = st.number_input(
-            tr("Schedule Publish Offset Hours"),
-            min_value=0.0,
-            value=0.0,
-            step=1.0,
-            help=tr("Schedule Publish Offset Help"),
-            key="schedule_publish_offset_hours",
-        )
-        review_required = st.checkbox(
-            tr("Schedule Review Required"),
-            help=tr("Schedule Review Required Help"),
-            key="schedule_review_required",
-        )
-
         if st.button(
             tr("Schedule Confirm"),
             type="primary",
@@ -7175,8 +7182,6 @@ def _render_schedule_dialog(base_params: VideoParams):
             schedule_store.create_schedule(
                 occurrences=final_occurrences,
                 params=base_params.model_dump(),
-                youtube_publish_offset_hours=publish_offset_hours,
-                youtube_review_required=review_required,
             )
             st.session_state["schedule_extra_dates"] = []
             st.session_state["schedule_dialog_open"] = False
@@ -7219,6 +7224,23 @@ def _render_generation_controls(
         st.session_state.pop("task_restore_upload_requirements", None)
 
     _render_settings_transfer(params)
+
+    if youtube_upload.youtube_upload_service.is_configured():
+        with st.expander(tr("Schedule Youtube Section"), expanded=False):
+            params.youtube_publish_offset_hours = st.number_input(
+                tr("Schedule Publish Offset Hours"),
+                min_value=0.0,
+                value=params.youtube_publish_offset_hours,
+                step=1.0,
+                help=tr("Schedule Publish Offset Help"),
+                key="youtube_publish_offset_hours_input",
+            )
+            params.youtube_review_required = st.checkbox(
+                tr("Schedule Review Required"),
+                value=params.youtube_review_required,
+                help=tr("Schedule Review Required Help"),
+                key="youtube_review_required_checkbox",
+            )
 
     start_button = st.button(
         tr("Generate Video"),
