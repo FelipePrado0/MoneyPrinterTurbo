@@ -18,6 +18,8 @@
 
 </div>
 
+> **本仓库是 [harry0703/MoneyPrinterTurbo](https://github.com/harry0703/MoneyPrinterTurbo) 的 fork。** 在原项目基础上新增了视频生成的**定时/批量调度**、**WebUI 登录保护**和 **YouTube 发布 Webhook 通知**等功能。下方大部分徽章、素材演示和链接仍指向原项目。
+
 ## 界面预览 🖥️
 
 <h4 align="center">WebUI</h4>
@@ -153,6 +155,8 @@
 - [x] 提供 **AI Agent、WebUI、API 和 CLI** 四种使用方式，既能快速上手，也能接入自动化流程
 - [x] 从主题自动完成脚本、配音、素材、字幕、配乐和剪辑，也支持在每个环节使用自定义内容
 - [x] 支持 **批量生成多条成片**、任务历史记录，以及生成设置与 API Key 的导入、导出和恢复
+- [x] 支持**定时/批量生成计划**：可一次性或按天/周/月重复生成，支持单一主题重复多次或多主题排队，由后台调度器按计划自动派发生成任务
+- [x] 支持 **WebUI 登录保护**：配置账号邮箱后，可用固定密码或首次启动自动生成的密码登录，多次失败自动锁定
 
 ### 脚本与模型服务
 
@@ -280,7 +284,7 @@
 #### ① 克隆代码
 
 ```shell
-git clone https://github.com/harry0703/MoneyPrinterTurbo.git
+git clone https://github.com/FelipePrado0/MoneyPrinterTurbo.git
 ```
 
 #### ② 首次配置
@@ -329,7 +333,7 @@ docker compose -f docker-compose.release.yml up
 推荐使用 [uv](https://docs.astral.sh/uv/) 管理 Python 环境和依赖。项目支持 Python 3.11 或更高版本，以下示例使用 Python 3.11。
 
 ```shell
-git clone https://github.com/harry0703/MoneyPrinterTurbo.git
+git clone https://github.com/FelipePrado0/MoneyPrinterTurbo.git
 cd MoneyPrinterTurbo
 uv python install 3.11
 uv sync --frozen
@@ -501,6 +505,15 @@ youtube_contains_synthetic_media = true
 保存配置并重启项目。之后每个成片都会带着 LLM 生成的标题、简介和标签自动上传。刷新令牌会自动续期，发布过程不需要打开浏览器，因此在 Docker 和无桌面服务器上同样可用。
 
 WebUI 中的入口在 **设置 → 自动发布设置**。
+
+如果需要在视频发布到 YouTube 后通知外部系统（例如触发另一个自动化流程），可以额外配置：
+
+```toml
+[app]
+youtube_publish_webhook_url = "https://your-endpoint.example.com/webhook"
+```
+
+每次成功发布后会向该地址发送一次 `POST` 请求，携带视频 ID、链接、标题、简介、标签等信息。通知失败只会记录日志，不会影响已经完成的发布。
 
 </details>
 

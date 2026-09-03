@@ -18,6 +18,8 @@ English | [简体中文](README.md) | [日本語](README-ja.md) | [Releases](htt
 
 </div>
 
+> **This repository is a fork of [harry0703/MoneyPrinterTurbo](https://github.com/harry0703/MoneyPrinterTurbo).** On top of the original project, it adds **scheduled/batch video generation**, a **WebUI login gate**, and a **YouTube publish webhook notification**. Most badges, sample videos, and links below still point to the original project.
+
 ## Screenshots 🖥️
 
 <h4 align="center">WebUI</h4>
@@ -153,6 +155,8 @@ Thanks to [Kimi](https://platform.kimi.ai?track_id=track-f6b0a640d35c41deb03b247
 - [x] Use **AI Agent, WebUI, API, or CLI** workflows for quick creation or automated production
 - [x] Go from a topic to script, voiceover, footage, subtitles, music, and editing automatically, while retaining control over every stage
 - [x] Generate multiple output variants in batches, review task history, and import or export generation settings and API keys
+- [x] Schedule generation runs: run once or repeat daily/weekly/monthly, queue the same topic multiple times or several different topics, and let the background dispatcher pick up and run each occurrence automatically
+- [x] Protect the WebUI with a **login gate**: configure an account email, sign in with a fixed or auto-generated password, and get locked out automatically after repeated failed attempts
 
 ### Scripts and Model Providers
 
@@ -284,7 +288,7 @@ Use the local setup or Docker instructions below.
 #### ① Clone the Project
 
 ```shell
-git clone https://github.com/harry0703/MoneyPrinterTurbo.git
+git clone https://github.com/FelipePrado0/MoneyPrinterTurbo.git
 ```
 
 #### ② Complete the Initial Setup
@@ -327,7 +331,7 @@ Open your browser and visit http://127.0.0.1:8080/docs or http://127.0.0.1:8080/
 Use [uv](https://docs.astral.sh/uv/) to manage the Python environment and dependencies. The project supports Python 3.11 or later; the example below uses Python 3.11.
 
 ```shell
-git clone https://github.com/harry0703/MoneyPrinterTurbo.git
+git clone https://github.com/FelipePrado0/MoneyPrinterTurbo.git
 cd MoneyPrinterTurbo
 uv python install 3.11
 uv sync --frozen
@@ -516,6 +520,15 @@ youtube_contains_synthetic_media = true
 Restart the app after saving. Every generated video is then uploaded with a title, description, and tags produced by the LLM. The refresh token renews itself, so publishing never opens a browser — which also makes it work in Docker and on headless servers.
 
 The same settings are available in the WebUI under **Settings → Auto-Publish Settings**.
+
+To notify an external system after a video is published to YouTube (for example, to trigger another automation), add:
+
+```toml
+[app]
+youtube_publish_webhook_url = "https://your-endpoint.example.com/webhook"
+```
+
+Every successful publish sends a `POST` request to that URL with the video ID, link, title, description, and tags. A failed notification is only logged and never affects the publish that already succeeded.
 
 </details>
 
