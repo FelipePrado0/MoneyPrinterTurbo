@@ -68,6 +68,7 @@ from app.services.voice_elevenlabs import (  # noqa: F401
     is_elevenlabs_voice,
 )
 from app.services.voice_chatterbox import (  # noqa: F401
+    _openai_compatible_tts,
     chatterbox_tts,
     get_chatterbox_voices,
     is_chatterbox_voice,
@@ -79,6 +80,14 @@ from app.services.voice_fish_audio import (  # noqa: F401
     get_fish_audio_api_key,
     get_fish_audio_voices,
     is_fish_audio_voice,
+)
+
+from app.services.voice_kokoro import (  # noqa: F401
+    KOKORO_DEFAULT_VOICE,
+    _normalize_kokoro_voices,
+    get_kokoro_voices,
+    is_kokoro_voice,
+    kokoro_tts,
 )
 
 NO_VOICE_NAME = "no-voice"
@@ -308,6 +317,19 @@ def tts(
             )
         else:
             logger.error(f"Invalid chatterbox voice name format: {voice_name}")
+            return None
+    elif is_kokoro_voice(voice_name):
+        # 格式: kokoro:<voice>，voice 可带显示用的 -Female/-Male 后缀
+        parts = voice_name.split(":", 1)
+        if len(parts) >= 2 and parts[1].strip():
+            kokoro_voice = parts[1].strip()
+            if kokoro_voice.endswith(("-Female", "-Male")):
+                kokoro_voice = kokoro_voice.rsplit("-", 1)[0]
+            return kokoro_tts(
+                text, kokoro_voice, voice_file, voice_rate, voice_volume
+            )
+        else:
+            logger.error(f"Invalid kokoro voice name format: {voice_name}")
             return None
     elif is_fish_audio_voice(voice_name):
         parts = voice_name.split(":")
@@ -541,16 +563,82 @@ def _build_subtitle_items_from_legacy_submaker(
     return sub_items
 
 
-def create_subtitle(sub_maker: SubMaker, text: str, subtitle_file: str):
+def _build_subtitle_items_from_edge_cues_words(sub_maker: SubMaker) -> list[str]:
+    """
+    Directly format edge_tts cues into single-word / cue-level SRT items.
+    """
+    formatter = _build_subtitle_formatter()
+    sub_items = []
+    sub_index = 0
+    for cue in sub_maker.cues:
+        cue_text = unescape(cue.content).strip()
+        if not cue_text:
+            continue
+        sub_index += 1
+        start_time = int(cue.start.total_seconds() * 10000000)
+        end_time = int(cue.end.total_seconds() * 10000000)
+        sub_items.append(
+            formatter(
+                idx=sub_index,
+                start_time=start_time,
+                end_time=end_time,
+                sub_text=cue_text,
+            )
+        )
+    return sub_items
+
+
+def _build_subtitle_items_from_legacy_submaker_words(sub_maker: SubMaker) -> list[str]:
+    """
+    Directly format legacy submaker into single-word SRT items.
+    """
+    formatter = _build_subtitle_formatter()
+    sub_items = []
+    sub_index = 0
+    legacy_offsets = getattr(sub_maker, "offset", [])
+    legacy_subs = getattr(sub_maker, "subs", [])
+    for offset, sub in zip(legacy_offsets, legacy_subs):
+        cue_text = unescape(sub).strip()
+        if not cue_text:
+            continue
+        sub_index += 1
+        start_time, end_time = offset
+        sub_items.append(
+            formatter(
+                idx=sub_index,
+                start_time=start_time,
+                end_time=end_time,
+                sub_text=cue_text,
+            )
+        )
+    return sub_items
+
+
+def create_subtitle(
+    sub_maker: SubMaker,
+    text: str,
+    subtitle_file: str,
+    word_level: bool = False,
+):
     """
     优化字幕文件
     1. 将字幕文件按照标点符号分割成多行
     2. 逐行匹配字幕文件中的文本
     3. 生成新的字幕文件
+    如果 word_level 为 True，直接输出逐词单条字幕。
     """
     text = _format_text(text)
-    script_lines = utils.split_string_by_punctuations(text)
     try:
+        if word_level:
+            if hasattr(sub_maker, "cues") and sub_maker.cues:
+                sub_items = _build_subtitle_items_from_edge_cues_words(sub_maker)
+            else:
+                sub_items = _build_subtitle_items_from_legacy_submaker_words(sub_maker)
+            if sub_items:
+                _write_subtitle_items(sub_items, subtitle_file)
+                return
+
+        script_lines = utils.split_string_by_punctuations(text)
         if hasattr(sub_maker, "cues") and sub_maker.cues:
             sub_items = _build_subtitle_items_from_edge_cues(sub_maker, script_lines)
         else:

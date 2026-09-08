@@ -495,3 +495,27 @@ def test_script_order_constraint_does_not_replace_saved_concat_preference():
         assert _widget_by_key(
             unconstrained_session.selectbox, "video_concat_mode_select"
         ).value == "random"
+
+
+def test_upstream_subtitle_controls_survive_fork_tabs_and_reload():
+    with (
+        patch.object(config, "app", dict(config.app, video_source="pexels")),
+        patch.object(config, "ui", dict(config.ui, language="en")),
+        patch.object(config, "try_save_config", return_value=True),
+    ):
+        app = _new_app()
+        _widget_by_key(app.checkbox, "subtitle_enabled_checkbox").set_value(True).run()
+        _widget_by_key(app.selectbox, "subtitle_position_select").set_value("two_thirds_bottom")
+        _widget_by_key(app.selectbox, "subtitle_display_mode_select").set_value("word_by_word")
+        _widget_by_key(app.selectbox, "subtitle_animation_select").set_value("pop_spring").run()
+        assert not app.exception
+        restored = _new_app()
+        for key, value in (
+            ("subtitle_position_select", "two_thirds_bottom"),
+            ("subtitle_display_mode_select", "word_by_word"),
+            ("subtitle_animation_select", "pop_spring"),
+        ):
+            assert _widget_by_key(restored.selectbox, key).value == value
+        _widget_by_key(restored.checkbox, "subtitle_enabled_checkbox").set_value(False).run()
+        assert _widget_by_key(restored.selectbox, "subtitle_display_mode_select").disabled
+        assert _widget_by_key(restored.selectbox, "subtitle_animation_select").disabled
