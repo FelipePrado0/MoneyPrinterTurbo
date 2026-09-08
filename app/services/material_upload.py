@@ -165,8 +165,10 @@ def _validate_video(
     if decoded.returncode != 0:
         # stderr is the only way to tell "genuinely corrupt" apart from a
         # narrower ffmpeg limitation (missing codec, container quirk) without
-        # reproducing the upload; validation itself must stay strict.
-        stderr_tail = decoded.stderr.decode("utf-8", errors="replace")[-2000:]
+        # reproducing the upload; validation itself must stay strict. Guard
+        # against callers/mocks whose result object doesn't carry stderr.
+        stderr_bytes = getattr(decoded, "stderr", None) or b""
+        stderr_tail = stderr_bytes.decode("utf-8", errors="replace")[-2000:]
         logger.warning(
             f"video material failed ffmpeg decode check: path={file_path}, "
             f"returncode={decoded.returncode}, stderr={stderr_tail}"
