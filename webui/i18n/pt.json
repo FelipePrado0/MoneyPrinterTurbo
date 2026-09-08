@@ -517,6 +517,14 @@
     "Download Clip": "Baixar Clipe (.mp4)",
     "Download Subtitle": "Baixar Legenda (.srt)",
     "Clip Generation Failed": "Falha na geração do clipe",
-    "Subtitle Language": "Idioma da Legenda"
+    "Subtitle Language": "Idioma da Legenda",
+    "Schedule Auto Topic": "Tema automático (tendência + IA)",
+    "Schedule Auto Topic Help": "Em vez de um tema fixo, o sistema escolhe um tema sozinho na hora de gerar, a partir de buscas em alta (mapeadas pra algo que o Pexels consiga ilustrar) ou, se isso falhar, de uma rotação de categorias evergreen com histórico de bom desempenho.",
+    "Schedule Auto Start Time": "Horário de início",
+    "Schedule Auto Interval Hours": "Postar a cada N horas",
+    "Schedule Auto Interval Hours Help": "Quantas horas entre cada vídeo automático, a partir do horário de início acima. Um horário que cairia depois da meia-noite é pulado naquele dia, não vira o dia seguinte.",
+    "Schedule Auto Day Count": "Por quantos dias",
+    "Schedule Auto End By Days": "Por quantidade de dias",
+    "Schedule Auto Preview Count": "{count} vídeos serão gerados automaticamente"
   }
 }

@@ -16,6 +16,7 @@ from loguru import logger
 from app.models.schema import VideoParams
 from app.services import schedule_store
 from app.services import task as task_service
+from app.services import trend_topic
 
 POLL_INTERVAL_SECONDS = 30.0
 
@@ -49,6 +50,18 @@ def _dispatch_occurrence(occurrence: dict) -> None:
         )
         schedule_store.mark_failed(occurrence_id, str(exc))
         return
+
+    if params.video_subject == trend_topic.AUTO_TOPIC_SENTINEL:
+        recent_topics = schedule_store.list_recent_resolved_topics()
+        resolved_topic = trend_topic.pick_topic(recent_topics)
+        params.video_subject = resolved_topic
+        # Best-effort: even if this write is lost, the resolved topic still
+        # runs below - it only affects future display/repeat-avoidance.
+        schedule_store.update_video_subject(occurrence_id, resolved_topic)
+        logger.info(
+            f"auto-topic resolved: occurrence_id={occurrence_id}, "
+            f"topic={resolved_topic!r}"
+        )
 
     logger.info(
         f"dispatching scheduled video: occurrence_id={occurrence_id}, "

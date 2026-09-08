@@ -73,6 +73,56 @@ def test_dispatch_occurrence_survives_unexpected_start_crash():
         scheduler._dispatch_occurrence(occurrence)  # nao deve levantar
 
 
+class TestAutoTopicDispatch:
+    """When an occurrence's video_subject is the auto-topic sentinel, the
+    real topic must be resolved at dispatch time (trend + LLM, with an
+    evergreen fallback), not at schedule-creation time."""
+
+    def _auto_occurrence(self, **overrides):
+        return _occurrence(
+            video_subject=scheduler.trend_topic.AUTO_TOPIC_SENTINEL,
+            params={
+                "video_subject": scheduler.trend_topic.AUTO_TOPIC_SENTINEL,
+                "video_aspect": "9:16",
+            },
+            **overrides,
+        )
+
+    def test_resolves_topic_before_starting_the_task(self):
+        occurrence = self._auto_occurrence()
+
+        with (
+            patch.object(
+                scheduler.schedule_store,
+                "list_recent_resolved_topics",
+                return_value=["yesterday's topic"],
+            ) as list_recent,
+            patch.object(
+                scheduler.trend_topic, "pick_topic", return_value="cute puppies playing"
+            ) as pick_topic,
+            patch.object(scheduler.schedule_store, "update_video_subject") as update,
+            patch.object(scheduler.task_service, "start") as start,
+        ):
+            scheduler._dispatch_occurrence(occurrence)
+
+        list_recent.assert_called_once()
+        pick_topic.assert_called_once_with(["yesterday's topic"])
+        update.assert_called_once_with(1, "cute puppies playing")
+        params = start.call_args.args[1]
+        assert params.video_subject == "cute puppies playing"
+
+    def test_non_auto_occurrence_never_calls_the_topic_picker(self):
+        occurrence = _occurrence()  # normal, pre-chosen subject
+
+        with (
+            patch.object(scheduler.trend_topic, "pick_topic") as pick_topic,
+            patch.object(scheduler.task_service, "start"),
+        ):
+            scheduler._dispatch_occurrence(occurrence)
+
+        pick_topic.assert_not_called()
+
+
 def test_poll_once_submits_every_claimed_occurrence():
     claimed = [_occurrence(id=1), _occurrence(id=2)]
 

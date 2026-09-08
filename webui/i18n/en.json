@@ -617,6 +617,14 @@
     "Download Clip": "Download Clip (.mp4)",
     "Download Subtitle": "Download Subtitle (.srt)",
     "Clip Generation Failed": "Clip generation failed",
-    "Subtitle Language": "Subtitle Language"
+    "Subtitle Language": "Subtitle Language",
+    "Schedule Auto Topic": "Automatic topic (trend + AI)",
+    "Schedule Auto Topic Help": "Instead of a fixed subject, the system picks a topic automatically at generation time from trending searches (mapped to something Pexels can visually cover) or, if that fails, a rotation of proven evergreen categories.",
+    "Schedule Auto Start Time": "Start time",
+    "Schedule Auto Interval Hours": "Post every N hours",
+    "Schedule Auto Interval Hours Help": "How many hours between each automatic video, starting from the start time above. A slot that would fall past midnight is skipped for that day, not carried over to the next.",
+    "Schedule Auto Day Count": "For how many days",
+    "Schedule Auto End By Days": "By number of days",
+    "Schedule Auto Preview Count": "{count} videos will be generated automatically"
   }
 }

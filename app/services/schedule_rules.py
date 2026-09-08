@@ -95,3 +95,62 @@ def expand_occurrences(
     occurrences.extend(extra_dates or [])
     occurrences.sort()
     return occurrences
+
+
+def expand_daily_interval_occurrences(
+    start_date: date,
+    start_time: time,
+    interval_hours: float,
+    end_date: date | None = None,
+    occurrence_count_days: int | None = None,
+    exceptions: set[date] | None = None,
+) -> list[datetime]:
+    """Expand an "N times a day" cadence into concrete occurrences.
+
+    Every day in range gets slots at ``start_time``, ``start_time +
+    interval_hours``, ``+ 2*interval_hours``, ... for as long as the slot
+    still falls on that same calendar day; a slot that would roll past
+    midnight is dropped, not wrapped into the next day, which restarts its
+    own run from ``start_time``. Mirrors ``expand_occurrences``: exactly one
+    of ``end_date``/``occurrence_count_days`` bounds the range, and
+    ``exceptions`` removes matching calendar days after expansion.
+    """
+    if not (0 < interval_hours <= 24):
+        raise ValueError("interval_hours must be greater than 0 and at most 24")
+    if occurrence_count_days is None and end_date is None:
+        raise ValueError(
+            "requires either end_date or occurrence_count_days"
+        )
+
+    occurrences = []
+    day_index = 0
+    while True:
+        current_date = start_date + timedelta(days=day_index)
+        if end_date is not None and current_date > end_date:
+            break
+        if (
+            occurrence_count_days is not None
+            and day_index >= occurrence_count_days
+        ):
+            break
+
+        day_start = datetime.combine(current_date, start_time)
+        offset_hours = 0.0
+        while offset_hours < 24:
+            occurrence = day_start + timedelta(hours=offset_hours)
+            if occurrence.date() != current_date:
+                break
+            if len(occurrences) >= MAX_OCCURRENCES:
+                raise ValueError(
+                    f"produces more than {MAX_OCCURRENCES} occurrences"
+                )
+            occurrences.append(occurrence)
+            offset_hours += interval_hours
+        day_index += 1
+
+    exceptions = exceptions or set()
+    occurrences = [
+        occurrence for occurrence in occurrences if occurrence.date() not in exceptions
+    ]
+    occurrences.sort()
+    return occurrences

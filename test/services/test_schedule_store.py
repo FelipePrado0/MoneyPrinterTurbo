@@ -207,3 +207,82 @@ def test_creates_table_on_first_connect(db_path):
             ).fetchall()
         }
     assert "schedule_occurrences" in tables
+
+
+class TestUpdateVideoSubject:
+    def test_updates_the_column_and_the_embedded_params(self, db_path):
+        group_id = schedule_store.create_schedule(
+            occurrences=[_occurrence(datetime(2026, 3, 5, 9, 0), "__AUTO__")],
+            params=BASE_PARAMS,
+            db_path=db_path,
+        )
+        occurrence_id = schedule_store.list_occurrences(
+            group_id=group_id, db_path=db_path
+        )[0]["id"]
+
+        schedule_store.update_video_subject(
+            occurrence_id, "cute puppies playing", db_path=db_path
+        )
+
+        row = schedule_store.list_occurrences(group_id=group_id, db_path=db_path)[0]
+        assert row["video_subject"] == "cute puppies playing"
+        assert row["params"]["video_subject"] == "cute puppies playing"
+
+    def test_unknown_occurrence_id_is_a_silent_no_op(self, db_path):
+        schedule_store.create_schedule(
+            occurrences=[_occurrence(datetime(2026, 3, 5, 9, 0))],
+            params=BASE_PARAMS,
+            db_path=db_path,
+        )
+        # Must not raise even if the row doesn't exist.
+        schedule_store.update_video_subject(9999, "whatever", db_path=db_path)
+
+
+class TestListRecentResolvedTopics:
+    def test_returns_dispatched_subjects_most_recent_first(self, db_path):
+        schedule_store.create_schedule(
+            occurrences=[
+                _occurrence(datetime(2026, 3, 5, 9, 0), "topic A"),
+                _occurrence(datetime(2026, 3, 6, 9, 0), "topic B"),
+            ],
+            params=BASE_PARAMS,
+            db_path=db_path,
+        )
+        for occurrence in schedule_store.list_occurrences(db_path=db_path):
+            schedule_store.mark_dispatched(occurrence["id"], "task-x", db_path=db_path)
+
+        topics = schedule_store.list_recent_resolved_topics(db_path=db_path)
+        assert topics == ["topic B", "topic A"]
+
+    def test_excludes_pending_and_sentinel_rows(self, db_path):
+        schedule_store.create_schedule(
+            occurrences=[
+                _occurrence(datetime(2026, 3, 5, 9, 0), "__AUTO_TREND_TOPIC__"),
+                _occurrence(datetime(2026, 3, 6, 9, 0), "resolved topic"),
+            ],
+            params=BASE_PARAMS,
+            db_path=db_path,
+        )
+        rows = schedule_store.list_occurrences(db_path=db_path)
+        # Only the second (resolved) row gets dispatched+resolved; the first
+        # stays pending, still holding the sentinel.
+        resolved_row = next(r for r in rows if r["video_subject"] == "resolved topic")
+        schedule_store.mark_dispatched(resolved_row["id"], "task-x", db_path=db_path)
+
+        topics = schedule_store.list_recent_resolved_topics(db_path=db_path)
+        assert topics == ["resolved topic"]
+
+    def test_respects_limit(self, db_path):
+        schedule_store.create_schedule(
+            occurrences=[
+                _occurrence(datetime(2026, 3, day, 9, 0), f"topic {day}")
+                for day in range(5, 10)
+            ],
+            params=BASE_PARAMS,
+            db_path=db_path,
+        )
+        for occurrence in schedule_store.list_occurrences(db_path=db_path):
+            schedule_store.mark_dispatched(occurrence["id"], "task-x", db_path=db_path)
+
+        topics = schedule_store.list_recent_resolved_topics(limit=2, db_path=db_path)
+        assert topics == ["topic 9", "topic 8"]

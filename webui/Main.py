@@ -63,6 +63,7 @@ from app.services import (
 from app.services import elevenlabs_music as elevenlabs_music_service
 from app.services import schedule_rules
 from app.services import schedule_store
+from app.services import trend_topic
 from app.services import sonilo as sonilo_service
 from app.services import state as sm
 from app.services import task as tm
@@ -7724,16 +7725,136 @@ def _compose_schedule_occurrences(
     return result
 
 
+def _render_auto_topic_schedule_dialog(base_params: VideoParams):
+    """Cadência "N vezes ao dia, tema escolhido sozinho por tendência + IA".
+
+    Fluxo próprio e mais simples que o agendamento manual (sem fila de
+    temas, sem exceções/datas extras): cada ocorrência é gravada com o
+    ``video_subject`` sentinela; o tema real só é resolvido quando o
+    despachante (``scheduler.py``) dispara a ocorrência, não agora.
+    """
+    date_col, time_col = st.columns(2)
+    start_date = date_col.date_input(
+        tr("Schedule Start Date"), key="schedule_auto_start_date"
+    )
+    start_time = time_col.time_input(
+        tr("Schedule Auto Start Time"), key="schedule_auto_start_time"
+    )
+
+    interval_hours = st.number_input(
+        tr("Schedule Auto Interval Hours"),
+        min_value=0.5,
+        max_value=24.0,
+        value=4.8,
+        step=0.5,
+        key="schedule_auto_interval_hours",
+        help=tr("Schedule Auto Interval Hours Help"),
+    )
+
+    auto_end_mode_labels = {
+        "count": tr("Schedule Auto End By Days"),
+        "date": tr("Schedule End By Date"),
+    }
+    end_mode = st.radio(
+        tr("Schedule End Mode"),
+        options=["count", "date"],
+        format_func=lambda value: auto_end_mode_labels[value],
+        key="schedule_auto_end_mode",
+        horizontal=True,
+    )
+    occurrence_count_days = None
+    end_date = None
+    if end_mode == "count":
+        occurrence_count_days = st.number_input(
+            tr("Schedule Auto Day Count"),
+            min_value=1,
+            max_value=schedule_rules.MAX_OCCURRENCES,
+            value=7,
+            step=1,
+            key="schedule_auto_day_count",
+        )
+    else:
+        end_date = st.date_input(
+            tr("Schedule End Date"), key="schedule_auto_end_date"
+        )
+
+    preview_error = None
+    base_dates: list[datetime] = []
+    try:
+        base_dates = schedule_rules.expand_daily_interval_occurrences(
+            start_date=start_date,
+            start_time=start_time,
+            interval_hours=interval_hours,
+            occurrence_count_days=occurrence_count_days,
+            end_date=end_date,
+        )
+    except ValueError as exc:
+        preview_error = str(exc)
+
+    st.divider()
+    st.write(f"**{tr('Schedule Preview')}**")
+    if preview_error:
+        st.error(preview_error)
+    elif not base_dates:
+        st.info(tr("Schedule Preview Empty"))
+    else:
+        st.caption(
+            tr("Schedule Auto Preview Count").format(count=len(base_dates))
+        )
+        for occurrence_date in base_dates[:10]:
+            st.write(f"{occurrence_date.strftime('%Y-%m-%d %H:%M')} — {tr('Schedule Auto Topic')}")
+        if len(base_dates) > 10:
+            st.caption(f"... +{len(base_dates) - 10}")
+
+        if st.button(
+            tr("Schedule Confirm"),
+            type="primary",
+            use_container_width=True,
+            icon=":material/schedule:",
+            key="schedule_auto_confirm",
+        ):
+            occurrences = [
+                {
+                    "generate_at": occurrence_date,
+                    "video_subject": trend_topic.AUTO_TOPIC_SENTINEL,
+                }
+                for occurrence_date in base_dates
+            ]
+            schedule_store.create_schedule(
+                occurrences=occurrences,
+                params=base_params.model_dump(),
+            )
+            st.session_state["schedule_dialog_open"] = False
+            st.toast(tr("Schedule Created"), icon=":material/schedule:")
+            st.rerun()
+
+
 @st.dialog(tr("New Schedule"), width="large", on_dismiss=_dismiss_schedule_dialog)
 def _render_schedule_dialog(base_params: VideoParams):
+    auto_topic_mode = st.checkbox(
+        tr("Schedule Auto Topic"),
+        key="schedule_auto_topic_mode",
+        help=tr("Schedule Auto Topic Help"),
+    )
+    if auto_topic_mode:
+        _render_auto_topic_schedule_dialog(base_params)
+        return
+
+    # Labels are translated up front, not inside format_func: AppTest (and
+    # potentially the real frontend diffing path) can invoke format_func
+    # outside the normal script-run context, where st.session_state (which
+    # tr() reads) is unavailable and raises.
+    interval_type_labels = {
+        value: tr(label) for value, label in _SCHEDULE_INTERVAL_LABEL_KEYS.items()
+    }
     interval_type = stable_selectbox(
         tr("Schedule Recurrence"),
-        options=["once", "daily", "weekly", "monthly"],
+        options=list(interval_type_labels.keys()),
         default_value=st.session_state.get(
             localized_widget_key("schedule_interval_type"), "once"
         ),
         key="schedule_interval_type",
-        format_func=lambda value: tr(_SCHEDULE_INTERVAL_LABEL_KEYS[value]),
+        format_func=lambda value: interval_type_labels[value],
     )
 
     date_col, time_col = st.columns(2)
@@ -7770,12 +7891,14 @@ def _render_schedule_dialog(base_params: VideoParams):
         if topics_count_peek > 1:
             st.caption(tr("Schedule End Mode Overridden By List"))
         else:
+            manual_end_mode_labels = {
+                "count": tr("Schedule End By Count"),
+                "date": tr("Schedule End By Date"),
+            }
             end_mode = st.radio(
                 tr("Schedule End Mode"),
                 options=["count", "date"],
-                format_func=lambda value: tr(
-                    "Schedule End By Count" if value == "count" else "Schedule End By Date"
-                ),
+                format_func=lambda value: manual_end_mode_labels[value],
                 key="schedule_end_mode",
                 horizontal=True,
             )

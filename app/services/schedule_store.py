@@ -201,6 +201,54 @@ def mark_dispatched(occurrence_id: int, task_id: str, db_path: str | None = None
         conn.commit()
 
 
+def update_video_subject(
+    occurrence_id: int, video_subject: str, db_path: str | None = None
+) -> None:
+    """Persist the resolved topic for an auto-topic occurrence.
+
+    Updates both the ``video_subject`` column (what the WebUI displays) and
+    the same field inside ``params_json`` (what a re-read of ``params``
+    would return), so the two never disagree once resolved. Unknown
+    ``occurrence_id`` is a silent no-op: the scheduler dispatch this backs
+    already committed to running with the resolved topic in memory, so a
+    lost write here is a display/history gap, not a generation failure.
+    """
+    with closing(_connect(db_path)) as conn:
+        row = conn.execute(
+            "SELECT params_json FROM schedule_occurrences WHERE id = ?",
+            (occurrence_id,),
+        ).fetchone()
+        if row is None:
+            return
+        params = json.loads(row[0])
+        params["video_subject"] = video_subject
+        conn.execute(
+            "UPDATE schedule_occurrences SET video_subject = ?, params_json = ? "
+            "WHERE id = ?",
+            (video_subject, json.dumps(params, ensure_ascii=False), occurrence_id),
+        )
+        conn.commit()
+
+
+def list_recent_resolved_topics(
+    limit: int = 20, db_path: str | None = None
+) -> list[str]:
+    """Most-recent-first subjects of already-dispatched occurrences.
+
+    Feeds the auto-topic picker's repeat-avoidance check. Only dispatched
+    rows count: a still-pending auto-topic occurrence holds the sentinel,
+    not a real topic, and including it would make every future pick "avoid
+    the sentinel" instead of avoiding real recent topics.
+    """
+    with closing(_connect(db_path)) as conn:
+        rows = conn.execute(
+            "SELECT video_subject FROM schedule_occurrences "
+            "WHERE status = ? ORDER BY generate_at DESC LIMIT ?",
+            (STATUS_DISPATCHED, limit),
+        ).fetchall()
+    return [row[0] for row in rows]
+
+
 def mark_failed(occurrence_id: int, error: str, db_path: str | None = None) -> None:
     with closing(_connect(db_path)) as conn:
         conn.execute(
