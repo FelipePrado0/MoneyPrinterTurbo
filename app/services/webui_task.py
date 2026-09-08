@@ -7,6 +7,7 @@ from app.config import config
 from app.controllers.manager.memory_manager import InMemoryTaskManager
 from app.models import const
 from app.models.schema import VideoParams
+from app.services import clip as clip_service
 from app.services import state as sm
 from app.services import task as tm
 from app.services.loomloom import LoomLoomConfirmedVideoRequest
@@ -167,5 +168,46 @@ def submit_generation(
         )
         logger.exception(
             f"failed to submit WebUI generation task, task_id={task_id}, error={exc}"
+        )
+        raise
+
+
+def submit_clip_generation(
+    task_id: str,
+    upload_id: str,
+    start_time: float,
+    subtitle_position: str,
+    subtitle_display_mode: str,
+    subtitle_language: str | None = None,
+) -> None:
+    """Register and submit a clip-from-video task; returns immediately.
+
+    Mirrors ``submit_generation()``: shares the same in-process task manager
+    and writes the "processing" state before scheduling, so a page refresh
+    can find the task even before the worker thread starts.
+    """
+    sm.state.update_task(task_id, state=const.TASK_STATE_PROCESSING, progress=0, kind="clip")
+    try:
+        _task_manager.add_task(
+            clip_service.generate_clip,
+            task_id=task_id,
+            upload_id=upload_id,
+            start_time=start_time,
+            subtitle_position=subtitle_position,
+            subtitle_display_mode=subtitle_display_mode,
+            subtitle_language=subtitle_language,
+        )
+    except Exception as exc:
+        error = f"{type(exc).__name__}: {exc}"
+        sm.state.update_task(
+            task_id,
+            state=const.TASK_STATE_FAILED,
+            progress=0,
+            kind="clip",
+            failed_stage="scheduling",
+            error=error,
+        )
+        logger.exception(
+            f"failed to submit WebUI clip task, task_id={task_id}, error={exc}"
         )
         raise

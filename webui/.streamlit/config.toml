@@ -9,6 +9,11 @@ base = "dark"
 # red 700) mantém a identidade vermelha e passa em ~4.97:1.
 primaryColor = "#D32F2F"
 
+[server]
+# Default (200MB) is too small for the clip-from-long-video feature, which
+# accepts full cartoon episodes as source material.
+maxUploadSize = 2048
+
 [browser]
 gatherUsageStats = false
 

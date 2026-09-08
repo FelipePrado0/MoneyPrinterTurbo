@@ -46,6 +46,7 @@ from app.models.schema import (
 )
 from app.services import auth_store
 from app.services import bgm as bgm_service
+from app.services import clip as clip_service
 from app.services import (
     cache_manager,
     llm,
@@ -8323,6 +8324,197 @@ def _render_generation_controls(
     return start_button
 
 
+_CLIP_SUBTITLE_POSITIONS = [
+    ("top", "Top"),
+    ("center", "Center"),
+    ("bottom", "Bottom"),
+    ("two_thirds_bottom", "2/3 from Bottom"),
+]
+_CLIP_SUBTITLE_DISPLAY_MODES = [
+    ("sentence", "Sentence by Sentence"),
+    ("word_by_word", "Single Word (Word by Word)"),
+]
+
+
+def _render_clip_task_status():
+    task_id = st.session_state.get("clip_active_task_id")
+    if not task_id:
+        return
+    task = sm.state.get_task(task_id)
+    if not task:
+        return
+
+    state = task.get("state")
+    if state == const.TASK_STATE_PROCESSING:
+        st.progress(
+            min(100, max(0, int(task.get("progress", 0)))) / 100,
+            text=tr("Generating Clip"),
+        )
+        # Only the processing state needs to keep polling; complete/failed
+        # are terminal and render once.
+        st.session_state["_clip_status_poll_pending"] = True
+    elif state == const.TASK_STATE_COMPLETE:
+        st.session_state["_clip_status_poll_pending"] = False
+        if task.get("hard_cut_fallback"):
+            st.warning(tr("Clip Hard Cut Fallback Warning"))
+        video_file = task.get("video_file")
+        subtitle_file = task.get("subtitle_file")
+        if video_file and os.path.isfile(video_file):
+            st.video(video_file)
+            with open(video_file, "rb") as f:
+                st.download_button(
+                    tr("Download Clip"),
+                    f.read(),
+                    file_name="clip.mp4",
+                    mime="video/mp4",
+                    key="clip_download_video_button",
+                )
+        if subtitle_file and os.path.isfile(subtitle_file):
+            with open(subtitle_file, "rb") as f:
+                st.download_button(
+                    tr("Download Subtitle"),
+                    f.read(),
+                    file_name="clip.srt",
+                    mime="text/plain",
+                    key="clip_download_subtitle_button",
+                )
+    elif state == const.TASK_STATE_FAILED:
+        st.session_state["_clip_status_poll_pending"] = False
+        st.error(f"{tr('Clip Generation Failed')}: {task.get('error', '')}")
+
+
+@st.fragment(run_every="2s")
+def _render_clip_task_status_fragment():
+    _render_clip_task_status()
+
+
+def _render_clip_from_video_section():
+    """Upload a long video, cut a <=60s subtitled vertical clip via STT.
+
+    Speech-to-text only: this feature narrates over the uploaded footage's
+    own audio track and never runs TTS. Kept as its own self-contained
+    section (own upload, own task manager submission) rather than folded
+    into the LLM script -> TTS -> video pipeline above, since it skips that
+    entire flow.
+    """
+    with st.expander(tr("Clip From Video"), expanded=False):
+        st.caption(tr("Clip From Video Help"))
+
+        uploaded_source = st.file_uploader(
+            tr("Upload Long Video"),
+            type=["mp4", "mov", "avi", "flv", "mkv"],
+            key="clip_source_uploader",
+        )
+        if uploaded_source is None:
+            return
+
+        upload_signature = (uploaded_source.name, uploaded_source.size)
+        if st.session_state.get("clip_upload_signature") != upload_signature:
+            with st.spinner(tr("Validating Upload")):
+                try:
+                    upload_id, duration, _has_audio = clip_service.save_clip_source(
+                        uploaded_source.name, uploaded_source
+                    )
+                except clip_service.ClipValidationError as exc:
+                    st.error(str(exc))
+                    return
+                except Exception:
+                    logger.exception("clip source upload failed in WebUI")
+                    st.error(tr("Clip Upload Failed"))
+                    return
+            st.session_state["clip_upload_signature"] = upload_signature
+            st.session_state["clip_upload_id"] = upload_id
+            st.session_state["clip_upload_duration"] = duration
+
+        upload_id = st.session_state.get("clip_upload_id")
+        duration = st.session_state.get("clip_upload_duration")
+        if not upload_id or not duration:
+            return
+
+        source_path = os.path.join(clip_service.clip_source_dir(), upload_id)
+        max_start = max(0.0, duration - clip_service.MIN_REMAINING_SECONDS)
+        preview_start = st.number_input(
+            tr("Clip Start Time (seconds)"),
+            min_value=0.0,
+            max_value=max_start,
+            value=min(st.session_state.get("clip_start_time", 0.0), max_start),
+            step=1.0,
+            key="clip_start_time",
+            help=tr("Clip Start Time Help"),
+        )
+        if os.path.isfile(source_path):
+            # Native player only: Streamlit has no callback for "where did
+            # playback stop", so the user scrubs here and types the second
+            # they saw into the field above, then re-previews to confirm.
+            st.video(source_path, start_time=preview_start)
+
+        # Labels are translated up front, not inside format_func: AppTest (and
+        # potentially the real frontend diffing path) can invoke format_func
+        # outside the normal script-run context, where st.session_state
+        # (which tr() reads) is unavailable and raises.
+        position_labels = {value: tr(label) for value, label in _CLIP_SUBTITLE_POSITIONS}
+        mode_labels = {
+            value: tr(label) for value, label in _CLIP_SUBTITLE_DISPLAY_MODES
+        }
+        position_col, mode_col = st.columns(2)
+        with position_col:
+            selected_position = stable_selectbox(
+                tr("Position"),
+                options=list(position_labels.keys()),
+                default_value="bottom",
+                format_func=lambda value: position_labels[value],
+                key="clip_subtitle_position_select",
+            )
+        with mode_col:
+            selected_display_mode = stable_selectbox(
+                tr("Display Mode"),
+                options=list(mode_labels.keys()),
+                default_value="sentence",
+                format_func=lambda value: mode_labels[value],
+                key="clip_subtitle_display_mode_select",
+            )
+        selected_language = st.text_input(
+            tr("Subtitle Language"),
+            value="",
+            placeholder=tr("Auto Detect"),
+            help=tr("Clip Subtitle Language Help"),
+            key="clip_subtitle_language_input",
+        )
+
+        if st.button(
+            tr("Generate Clip"),
+            key="clip_generate_button",
+            type="primary",
+        ):
+            try:
+                clip_service.validate_start_time(preview_start, duration)
+            except clip_service.ClipValidationError as exc:
+                st.error(str(exc))
+            else:
+                task_id = utils.get_uuid()
+                webui_task.submit_clip_generation(
+                    task_id=task_id,
+                    upload_id=upload_id,
+                    start_time=preview_start,
+                    subtitle_position=selected_position,
+                    subtitle_display_mode=selected_display_mode,
+                    subtitle_language=(selected_language.strip() or None),
+                )
+                st.session_state["clip_active_task_id"] = task_id
+                # The uploaded source is consumed (and deleted) by the
+                # scheduled task; a second click must upload again.
+                st.session_state.pop("clip_upload_signature", None)
+                st.session_state.pop("clip_upload_id", None)
+                st.session_state.pop("clip_upload_duration", None)
+                st.rerun()
+
+    if st.session_state.get("clip_active_task_id"):
+        if st.session_state.get("_clip_status_poll_pending", True):
+            _render_clip_task_status_fragment()
+        else:
+            _render_clip_task_status()
+
+
 def _render_application():
     """按固定顺序渲染顶部栏、弹窗、生成表单和任务结果。"""
     _render_top_bar()
@@ -8344,6 +8536,10 @@ def _render_application():
     restore_succeeded = st.session_state.pop("task_restore_succeeded", False)
     if restore_applied or restore_succeeded:
         st.success(tr("Task Configuration Loaded"))
+
+    # Standalone feature: skips the LLM script -> TTS -> video pipeline
+    # entirely, so it lives before that form rather than inside it.
+    _render_clip_from_video_section()
 
     params = VideoParams(video_subject="")
     params.match_materials_to_script = bool(

@@ -8,11 +8,16 @@ from pydantic import ValidationError
 from app.controllers.manager.base_manager import TaskManager
 from app.models import const
 from app.models.schema import VideoParams
+from app.services import clip as clip_service
 from app.services import state as sm
 from app.services import task as tm
 
 FUNC_MAP = {
     "start": tm.start,
+    # clip_service.generate_clip() takes plain scalar kwargs (task_id,
+    # upload_id, start_time, ...), not a structured params object like
+    # tm.start()'s VideoParams, so it needs no extra (de)serialization below.
+    "generate_clip": clip_service.generate_clip,
     # 'start_test': tm.start_test
 }
 

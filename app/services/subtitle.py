@@ -19,11 +19,10 @@ initial_prompt = config.whisper.get("initial_prompt", "") or None
 model = None
 
 
-def create(audio_file, subtitle_file: str = "", word_level: bool = False):
+def _load_model():
     global model
     if WhisperModel is None:
-        logger.warning("faster_whisper not available, skipping whisper subtitle generation")
-        return ""
+        return None
     if not model:
         model_path = f"{utils.root_dir()}/models/whisper-{model_size}"
         model_bin_file = f"{model_path}/model.bin"
@@ -47,17 +46,31 @@ def create(audio_file, subtitle_file: str = "", word_level: bool = False):
                 f"********************************************\n\n"
             )
             return None
+    return model
 
-    logger.info(f"start, output file: {subtitle_file}")
-    if not subtitle_file:
-        subtitle_file = f"{audio_file}.srt"
 
-    segments, info = model.transcribe(
+def transcribe_segments(
+    audio_file, word_level: bool = False, language: str | None = None
+) -> list[dict]:
+    """Run Whisper STT and return sentence (or word) level segments.
+
+    Each item is ``{"msg": str, "start_time": float, "end_time": float}``.
+    Shared by :func:`create` (writes an ``.srt`` file) and the clip-from-video
+    feature, which needs the raw segment boundaries before deciding where to
+    cut. Returns ``None`` if the model is unavailable or failed to load
+    (distinct from ``[]``, which means transcription ran but found no speech).
+    """
+    whisper_model = _load_model()
+    if whisper_model is None:
+        return None
+
+    segments, info = whisper_model.transcribe(
         audio_file,
         beam_size=5,
         word_timestamps=True,
         vad_filter=True,
         vad_parameters=dict(min_silence_duration_ms=500),
+        language=language,
         **({"initial_prompt": initial_prompt} if initial_prompt else {}),
     )
 
@@ -132,7 +145,11 @@ def create(audio_file, subtitle_file: str = "", word_level: bool = False):
 
     diff = end - start
     logger.info(f"complete, elapsed: {diff:.2f} s")
+    return subtitles
 
+
+def subtitles_to_srt(subtitles: list[dict]) -> str:
+    """Render ``transcribe_segments()`` output as SRT text (no trailing write)."""
     idx = 1
     lines = []
     for subtitle in subtitles:
@@ -145,9 +162,24 @@ def create(audio_file, subtitle_file: str = "", word_level: bool = False):
             )
             idx += 1
 
-    sub = "\n".join(lines) + "\n"
+    return "\n".join(lines) + "\n"
+
+
+def create(audio_file, subtitle_file: str = "", word_level: bool = False):
+    if WhisperModel is None:
+        logger.warning("faster_whisper not available, skipping whisper subtitle generation")
+        return ""
+
+    logger.info(f"start, output file: {subtitle_file}")
+    if not subtitle_file:
+        subtitle_file = f"{audio_file}.srt"
+
+    subtitles = transcribe_segments(audio_file, word_level=word_level)
+    if subtitles is None:
+        return None
+
     with open(subtitle_file, "w", encoding="utf-8") as f:
-        f.write(sub)
+        f.write(subtitles_to_srt(subtitles))
     logger.info(f"subtitle file created: {subtitle_file}")
 
 

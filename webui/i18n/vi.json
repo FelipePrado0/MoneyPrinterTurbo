@@ -50,7 +50,7 @@
     "Choose Script Candidate": "Chọn một phương án kịch bản",
     "Use Selected Candidate": "Dùng kịch bản và từ khóa này",
     "LoomLoom Candidate Applied": "Đã áp dụng kịch bản và từ khóa đã chọn",
-    "Auto Detect": "Tự Động Phát Hiện",
+    "Auto Detect": "Auto detect",
     "Video Script": "Kịch Bản Video (Không Bắt Buộc)",
     "Video Script Help": "Để trống để AI tạo từ chủ đề video. Dấu câu hợp lý giúp tạo phụ đề chính xác hơn.",
     "Generate Video Keywords": "Tạo từ khóa bằng AI",
@@ -502,6 +502,21 @@
     "OFox Upstream Vendor Help": "Nhà cung cấp thượng nguồn phục vụ việc tạo video OFox. BytePlus (quốc tế) là mặc định với chính sách nội dung nhất quán; Volcano Engine là nhà cung cấp Trung Quốc đại lục; Tự động để gateway OFox cân bằng tải giữa các nhà cung cấp.",
     "OFox Vendor BytePlus": "BytePlus (quốc tế, mặc định)",
     "OFox Vendor Volcengine": "Volcano Engine (Trung Quốc đại lục)",
-    "OFox Vendor Auto": "Tự động (gateway cân bằng tải)"
+    "OFox Vendor Auto": "Tự động (gateway cân bằng tải)",
+    "Clip From Video": "Clip From Video",
+    "Clip From Video Help": "Upload a long video (e.g. a cartoon episode). It cuts a subtitled vertical clip of at most 60s, ending on a sentence boundary when possible. Subtitles come from speech-to-text on the video's own audio -- no text-to-speech is used.",
+    "Upload Long Video": "Upload Long Video",
+    "Validating Upload": "Validating upload...",
+    "Clip Upload Failed": "Failed to validate the uploaded video.",
+    "Clip Start Time (seconds)": "Clip Start Time (seconds)",
+    "Clip Start Time Help": "Scrub the preview below, read the timestamp shown by the player, then type it here and re-check the preview.",
+    "Clip Subtitle Language Help": "Leave empty to auto-detect the spoken language, or type a language code (e.g. en, pt, es).",
+    "Generate Clip": "Generate Clip",
+    "Generating Clip": "Generating clip...",
+    "Clip Hard Cut Fallback Warning": "No sentence boundary was found near the 60s limit, so the clip was cut exactly at 60s.",
+    "Download Clip": "Download Clip (.mp4)",
+    "Download Subtitle": "Download Subtitle (.srt)",
+    "Clip Generation Failed": "Clip generation failed",
+    "Subtitle Language": "Subtitle Language"
   }
 }
