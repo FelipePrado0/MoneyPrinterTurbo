@@ -50,7 +50,7 @@
     "Choose Script Candidate": "Escolher um roteiro candidato",
     "Use Selected Candidate": "Usar este roteiro e palavras-chave",
     "LoomLoom Candidate Applied": "Roteiro e palavras-chave selecionados aplicados",
-    "Auto Detect": "Detectar Automaticamente",
+    "Auto Detect": "Detectar automaticamente",
     "Video Script": "Roteiro do vídeo (opcional)",
     "Video Script Help": "Deixe em branco para gerá-lo com IA a partir do tema do vídeo. Uma pontuação adequada ajuda a gerar as legendas.",
     "Generate Video Keywords": "Gerar palavras-chave com IA",
@@ -502,6 +502,21 @@
     "OFox Upstream Vendor Help": "Qual fornecedor upstream atende a geração de vídeo do OFox. BytePlus (internacional) é o padrão, com política de conteúdo consistente; Volcano Engine é o fornecedor da China continental; Auto deixa o gateway OFox balancear a carga entre fornecedores.",
     "OFox Vendor BytePlus": "BytePlus (internacional, padrão)",
     "OFox Vendor Volcengine": "Volcano Engine (China continental)",
-    "OFox Vendor Auto": "Automático (balanceamento do gateway)"
+    "OFox Vendor Auto": "Automático (balanceamento do gateway)",
+    "Clip From Video": "Clipe a Partir de Vídeo",
+    "Clip From Video Help": "Envie um vídeo longo (ex: um episódio de desenho). O sistema corta um clipe vertical legendado de até 60s, terminando numa fronteira de frase quando possível. As legendas vêm de reconhecimento de fala (STT) sobre o áudio do próprio vídeo -- não usa geração de voz (TTS).",
+    "Upload Long Video": "Enviar Vídeo Longo",
+    "Validating Upload": "Validando envio...",
+    "Clip Upload Failed": "Falha ao validar o vídeo enviado.",
+    "Clip Start Time (seconds)": "Início do Corte (segundos)",
+    "Clip Start Time Help": "Avance o vídeo abaixo, veja o tempo mostrado pelo player, digite aqui e pré-visualize de novo pra confirmar.",
+    "Clip Subtitle Language Help": "Deixe em branco pra detectar o idioma automaticamente, ou digite um código (ex: pt, en, es).",
+    "Generate Clip": "Gerar Clipe",
+    "Generating Clip": "Gerando clipe...",
+    "Clip Hard Cut Fallback Warning": "Nenhuma fronteira de frase foi encontrada perto do limite de 60s, então o corte foi feito exatamente em 60s.",
+    "Download Clip": "Baixar Clipe (.mp4)",
+    "Download Subtitle": "Baixar Legenda (.srt)",
+    "Clip Generation Failed": "Falha na geração do clipe",
+    "Subtitle Language": "Idioma da Legenda"
   }
 }

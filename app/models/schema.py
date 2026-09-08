@@ -584,6 +584,52 @@ class VideoMaterialUploadResponse(BaseResponse):
     )
 
 
+# ---------------------------
+# ----- CLIP (upload video, cut a subtitled vertical clip via STT) -----
+# ---------------------------
+class ClipUploadData(BaseModel):
+    upload_id: str
+    duration: float
+    has_audio: bool
+
+
+class ClipUploadResponse(BaseResponse):
+    data: ClipUploadData
+
+
+class ClipGenerateRequest(BaseModel):
+    upload_id: str
+    start_time: float = Field(ge=0)
+    subtitle_position: Optional[str] = config.ui.get("subtitle_position", "bottom")
+    subtitle_display_mode: SubtitleDisplayMode = _get_valid_ui_choice(
+        "subtitle_display_mode", _SUBTITLE_DISPLAY_MODES, "sentence"
+    )
+    # None/"" lets Whisper auto-detect the spoken language.
+    subtitle_language: Optional[str] = None
+
+
+class ClipTaskStatusData(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    task_id: str
+    state: int
+    progress: int = 0
+    video_file: Optional[str] = None
+    subtitle_file: Optional[str] = None
+    clip_duration: Optional[float] = None
+    hard_cut_fallback: Optional[bool] = None
+    failed_stage: Optional[str] = None
+    error: Optional[str] = None
+
+
+class ClipTaskResponse(BaseResponse):
+    data: TaskResponseData
+
+
+class ClipTaskQueryResponse(BaseResponse):
+    data: ClipTaskStatusData
+
+
 class YoutubePublishRequest(BaseModel):
     """Confirma ou edita o rascunho de revisão do YouTube de uma task."""
 

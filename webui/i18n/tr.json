@@ -50,7 +50,7 @@
     "Choose Script Candidate": "Bir Senaryo Adayı Seçin",
     "Use Selected Candidate": "Bu Senaryo ve Anahtar Kelimeleri Kullan",
     "LoomLoom Candidate Applied": "Seçilen senaryo ve anahtar kelimeler uygulandı",
-    "Auto Detect": "Otomatik Algılama",
+    "Auto Detect": "Auto detect",
     "Video Script": "Video Senaryosu (İsteğe Bağlı)",
     "Video Script Help": "Video konusundan AI ile oluşturmak için boş bırakın. Doğru noktalama, altyazı oluşturmayı kolaylaştırır.",
     "Generate Video Keywords": "AI ile Anahtar Kelime Oluştur",
@@ -502,6 +502,21 @@
     "OFox Upstream Vendor Help": "OFox video üretimini hangi üst akış sağlayıcısının sunacağı. BytePlus (uluslararası) tutarlı içerik politikasıyla varsayılandır; Volcano Engine Çin anakarası sağlayıcısıdır; Otomatik, OFox ağ geçidinin yükü sağlayıcılar arasında dengelemesine izin verir.",
     "OFox Vendor BytePlus": "BytePlus (uluslararası, varsayılan)",
     "OFox Vendor Volcengine": "Volcano Engine (Çin anakarası)",
-    "OFox Vendor Auto": "Otomatik (ağ geçidi yük dengeleme)"
+    "OFox Vendor Auto": "Otomatik (ağ geçidi yük dengeleme)",
+    "Clip From Video": "Clip From Video",
+    "Clip From Video Help": "Upload a long video (e.g. a cartoon episode). It cuts a subtitled vertical clip of at most 60s, ending on a sentence boundary when possible. Subtitles come from speech-to-text on the video's own audio -- no text-to-speech is used.",
+    "Upload Long Video": "Upload Long Video",
+    "Validating Upload": "Validating upload...",
+    "Clip Upload Failed": "Failed to validate the uploaded video.",
+    "Clip Start Time (seconds)": "Clip Start Time (seconds)",
+    "Clip Start Time Help": "Scrub the preview below, read the timestamp shown by the player, then type it here and re-check the preview.",
+    "Clip Subtitle Language Help": "Leave empty to auto-detect the spoken language, or type a language code (e.g. en, pt, es).",
+    "Generate Clip": "Generate Clip",
+    "Generating Clip": "Generating clip...",
+    "Clip Hard Cut Fallback Warning": "No sentence boundary was found near the 60s limit, so the clip was cut exactly at 60s.",
+    "Download Clip": "Download Clip (.mp4)",
+    "Download Subtitle": "Download Subtitle (.srt)",
+    "Clip Generation Failed": "Clip generation failed",
+    "Subtitle Language": "Subtitle Language"
   }
 }
