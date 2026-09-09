@@ -504,7 +504,7 @@
     "OFox Vendor Volcengine": "Volcano Engine (China continental)",
     "OFox Vendor Auto": "Automático (balanceamento do gateway)",
     "Clip From Video": "Clipe a Partir de Vídeo",
-    "Clip From Video Help": "Envie um vídeo longo (ex: um episódio de desenho). O sistema corta um clipe vertical legendado de até 60s, terminando numa fronteira de frase quando possível. As legendas vêm de reconhecimento de fala (STT) sobre o áudio do próprio vídeo -- não usa geração de voz (TTS).",
+    "Clip From Video Help": "Envie um vídeo longo. O sistema corta um clipe vertical legendado de até 60s, terminando numa fronteira de frase quando possível.",
     "Upload Long Video": "Enviar Vídeo Longo",
     "Validating Upload": "Validando envio...",
     "Clip Upload Failed": "Falha ao validar o vídeo enviado.",
