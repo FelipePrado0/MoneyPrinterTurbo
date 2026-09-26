@@ -1,4 +1,5 @@
 import time
+from contextlib import closing
 
 import pytest
 
@@ -62,15 +63,96 @@ def test_uploads_since_counts_only_recent(db):
     assert vh.uploads_since(150.0, db_path=db) == 1
 
 
-def test_metrics_and_performers(db):
+DAY = 86400.0
+
+
+def _published(db, index, public_at=None, views_24h=None, now=None):
+    vh.record(f"t{index}", f"S{index}", "autopilot", db_path=db)
+    vh.mark_published(f"t{index}", f"y{index}", "u", db_path=db)
+    if public_at is not None:
+        vh.update_metrics(
+            f"y{index}", views=views_24h, public_at=public_at, now=now, db_path=db
+        )
+
+
+def test_performers_rank_by_24h_views_without_overlap(db):
+    now = 10 * DAY
     for i, views in enumerate([10, 500, 90]):
-        vh.record(f"t{i}", f"S{i}", "autopilot", db_path=db)
-        vh.mark_published(f"t{i}", f"y{i}", "u", db_path=db)
-        vh.update_metrics(f"y{i}", views=views, likes=1, comments=0, db_path=db)
+        _published(db, i, public_at=now - DAY - 60, views_24h=views, now=now)
+    # Cumulative views must not decide the ranking any more.
+    vh.update_metrics("y0", views=99999, db_path=db)
     assert set(vh.published_youtube_ids(db_path=db)) == {"y0", "y1", "y2"}
-    top, bottom = vh.performers(limit=1, db_path=db)
+    top, bottom = vh.performers(limit=5, db_path=db)
     assert [r["subject"] for r in top] == ["S1"]
     assert [r["subject"] for r in bottom] == ["S0"]
+
+
+def test_performers_empty_until_two_videos_have_24h_views(db):
+    _published(db, 0, public_at=0.0, views_24h=50, now=DAY + 60)
+    _published(db, 1)
+    assert vh.performers(db_path=db) == ([], [])
+
+
+def test_snapshots_are_taken_once_inside_each_window(db):
+    public_at = 100 * DAY
+    _published(db, 0)
+    vh.update_metrics("y0", views=5, public_at=public_at, now=public_at + 3600, db_path=db)
+    row = vh.list_videos(db_path=db)[0][0]
+    assert row["public_at"] == public_at and row["views_24h"] is None
+
+    vh.update_metrics("y0", views=100, public_at=public_at, now=public_at + DAY + 60, db_path=db)
+    vh.update_metrics("y0", views=150, public_at=public_at, now=public_at + DAY + 3600, db_path=db)
+    vh.update_metrics("y0", views=900, public_at=public_at, now=public_at + 7 * DAY + 60, db_path=db)
+    row = vh.list_videos(db_path=db)[0][0]
+    assert (row["views_24h"], row["views_7d"], row["views"]) == (100, 900, 900)
+
+
+def test_snapshot_is_skipped_after_the_grace_period(db):
+    _published(db, 0)
+    vh.update_metrics("y0", views=700, public_at=0.0, now=3 * DAY, db_path=db)
+    row = vh.list_videos(db_path=db)[0][0]
+    assert row["views_24h"] is None and row["views_7d"] is None
+
+
+def test_snapshot_needs_a_real_view_count(db):
+    _published(db, 0)
+    vh.update_metrics("y0", likes=3, public_at=0.0, now=DAY + 60, db_path=db)
+    assert vh.list_videos(db_path=db)[0][0]["views_24h"] is None
+
+
+def test_snapshot_candidates_only_recent_videos_missing_a_window(db):
+    now = time.time()
+    _published(db, 0)  # not public yet: public_at unknown
+    _published(db, 1, public_at=now - 2 * DAY, views_24h=None, now=now)
+    _published(db, 2, public_at=now - 30 * DAY, views_24h=None, now=now)
+    _published(db, 3)  # both windows already filled
+    vh.update_metrics("y3", views=1, public_at=now - DAY - 60, now=now, db_path=db)
+    vh.update_metrics("y3", views=2, public_at=now - DAY - 60, now=now + 6 * DAY, db_path=db)
+    _published(db, 4, public_at=now - DAY - 60, views_24h=40, now=now)  # 7d still due
+    assert set(vh.snapshot_candidates(now=now, db_path=db)) == {"y0", "y1", "y4"}
+
+
+def test_old_database_gets_the_new_columns(tmp_path):
+    import sqlite3
+
+    path = str(tmp_path / "old.db")
+    with closing(sqlite3.connect(path)) as conn:
+        conn.execute(
+            "CREATE TABLE videos (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "task_id TEXT NOT NULL UNIQUE, subject TEXT NOT NULL, fact_key TEXT, "
+            "status TEXT NOT NULL, source TEXT NOT NULL, occurrence_id INTEGER, "
+            "attempt INTEGER NOT NULL DEFAULT 1, error TEXT, llm_model TEXT, "
+            "youtube_id TEXT, youtube_url TEXT, views INTEGER, likes INTEGER, "
+            "comments INTEGER, avg_view_percentage REAL, metrics_updated_at REAL, "
+            "published_at REAL, created_at REAL NOT NULL, updated_at REAL NOT NULL)"
+        )
+        conn.execute(
+            "INSERT INTO videos (task_id, subject, status, source, created_at, updated_at) "
+            "VALUES ('old', 'Old', 'published', 'api', 1, 1)"
+        )
+        conn.commit()
+    row = vh.list_videos(db_path=path)[0][0]
+    assert row["subject"] == "Old" and row["views_24h"] is None
 
 
 def test_known_topics_excludes_failed(db):

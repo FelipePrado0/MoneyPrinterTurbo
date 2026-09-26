@@ -589,6 +589,7 @@ _ENV_SECRET_OVERRIDES = {
     "youtube_client_secret": "MPT_YOUTUBE_CLIENT_SECRET",
     "youtube_refresh_token": "MPT_YOUTUBE_REFRESH_TOKEN",
     "openrouter_api_key": "MPT_OPENROUTER_API_KEY",
+    "youtube_data_api_key": "MPT_YOUTUBE_DATA_API_KEY",
     "pexels_api_keys": "MPT_PEXELS_API_KEYS",
     "pixabay_api_keys": "MPT_PIXABAY_API_KEYS",
 }

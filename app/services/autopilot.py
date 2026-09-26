@@ -21,6 +21,7 @@ from pydantic import ValidationError
 from app.models import const
 from app.models.schema import AutopilotSettings, VideoParams
 from app.services import (
+    audience_comments,
     llm,
     schedule_store,
     video_history,
@@ -208,10 +209,17 @@ def _topic_prompt(settings: AutopilotSettings, rejected: list[str]) -> str:
     performance = ""
     if top:
         performance = "\n## What performed best (make more like these)\n" + "\n".join(
-            f"- {row['subject']} ({row['views']} views)" for row in top
+            f"- {row['subject']} ({row['views_24h']} views in the first 24h)" for row in top
         )
         performance += "\n## What performed worst (avoid this angle)\n" + "\n".join(
-            f"- {row['subject']} ({row['views']} views)" for row in bottom
+            f"- {row['subject']} ({row['views_24h']} views in the first 24h)" for row in bottom
+        )
+    requested = audience_comments.requested_topics()
+    audience = ""
+    if requested:
+        audience = (
+            "\n## Topics the audience asked for (consider them, the rules above still apply)\n"
+            + "\n".join(f"- {item['topic']} (asked by {item['authors']} viewers)" for item in requested)
         )
     rejected_block = ""
     if rejected:
@@ -241,7 +249,7 @@ write it. Rules:
 
 ## History already published (never repeat)
 {known_lines}
-{performance}{rejected_block}
+{performance}{audience}{rejected_block}
 """.strip()
 
 
@@ -470,9 +478,23 @@ def run_metrics() -> None:
     metrics, problems = youtube_metrics.fetch_metrics(video_ids)
     for video_id, values in metrics.items():
         video_history.update_metrics(video_id, **values)
+    problems = problems + audience_comments.refresh()
     video_history.set_state("metrics_problems", problems)
     video_history.set_state("metrics_updated_at", _now().isoformat(timespec="seconds"))
     logger.info(f"youtube metrics updated: {len(metrics)} videos, problems: {problems}")
+
+
+def run_snapshots() -> None:
+    """Hourly: fill the 24h/7d view snapshots of recently published videos."""
+    video_ids = video_history.snapshot_candidates()
+    if not video_ids:
+        return
+    metrics, problems = youtube_metrics.fetch_metrics(video_ids, statistics_only=True)
+    for video_id, values in metrics.items():
+        video_history.update_metrics(video_id, **values)
+    if problems:
+        # Only report here; the daily run_metrics clears them once it works.
+        video_history.set_state("metrics_problems", problems)
 
 
 def run_backup() -> None:
@@ -517,6 +539,10 @@ def tick(now: datetime, submit) -> None:
     ):
         video_history.set_state("metrics_date", today)
         submit(run_metrics)
+    hour = now.strftime("%Y-%m-%dT%H")
+    if settings.metrics_enabled and video_history.get_state("snapshot_hour") != hour:
+        video_history.set_state("snapshot_hour", hour)
+        submit(run_snapshots)
     if video_history.get_state("backup_date") != today:
         video_history.set_state("backup_date", today)
         submit(run_backup)
@@ -548,5 +574,6 @@ def status(now: datetime | None = None) -> dict:
             if o["status"] != schedule_store.STATUS_CANCELLED
         ],
         "metrics_problems": video_history.get_state("metrics_problems") or [],
+        "audience_corrections": audience_comments.corrections(),
         "metrics_updated_at": video_history.get_state("metrics_updated_at"),
     }

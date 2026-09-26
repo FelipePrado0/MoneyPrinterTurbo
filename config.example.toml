@@ -509,6 +509,11 @@ youtube_privacy_status = "public"
 youtube_category_id = "22"
 # COPPA declaration. Set to true only when the video targets children.
 youtube_made_for_kids = false
+# Optional plain YouTube Data API key (Google Cloud > Credentials > API key,
+# with "YouTube Data API v3" enabled). Reads public data without OAuth:
+# trending topics, view/like/comment counts and comments of published videos.
+# Prefer the MPT_YOUTUBE_DATA_API_KEY env var over leaving it on disk here.
+youtube_data_api_key = ""
 # Discloses that the video contains synthetic or altered media. Generated
 # videos use TTS and stock footage, so this stays enabled by default.
 youtube_contains_synthetic_media = true

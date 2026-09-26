@@ -223,7 +223,7 @@ def test_run_metrics_updates_history_and_records_problems():
         autopilot.youtube_metrics,
         "fetch_metrics",
         return_value=({"yt1": {"views": 42, "likes": 3, "comments": 1}}, ["needs_reauthorization"]),
-    ):
+    ), patch.object(autopilot.audience_comments, "refresh", return_value=[]):
         autopilot.run_metrics()
     assert video_history.list_videos()[0][0]["views"] == 42
     assert video_history.get_state("metrics_problems") == ["needs_reauthorization"]
@@ -234,7 +234,54 @@ def test_tick_runs_metrics_and_backup_once_per_day():
     now = datetime(2026, 9, 25, 6, 0)
     autopilot.tick(now, submitted.append)
     autopilot.tick(now + timedelta(minutes=1), submitted.append)
-    assert submitted == [autopilot.run_metrics, autopilot.run_backup]
+    assert submitted == [autopilot.run_metrics, autopilot.run_snapshots, autopilot.run_backup]
+
+
+def test_tick_runs_snapshots_once_per_hour():
+    submitted = []
+    now = datetime(2026, 9, 25, 6, 0)
+    for minutes in (0, 30, 60, 61):
+        autopilot.tick(now + timedelta(minutes=minutes), submitted.append)
+    assert submitted.count(autopilot.run_snapshots) == 2
+
+
+def test_run_snapshots_fetches_statistics_of_candidates_only():
+    now = datetime.now().timestamp()
+    video_history.record("t1", "S", "autopilot")
+    video_history.mark_published("t1", "yt1", "u")
+    calls = []
+
+    def fake_fetch(video_ids, statistics_only=False):
+        calls.append((video_ids, statistics_only))
+        return {"yt1": {"views": 70, "public_at": now - 86400 - 60}}, []
+
+    with patch.object(autopilot.youtube_metrics, "fetch_metrics", side_effect=fake_fetch):
+        autopilot.run_snapshots()
+    assert calls == [(["yt1"], True)]
+    assert video_history.list_videos()[0][0]["views_24h"] == 70
+
+
+def test_run_snapshots_records_problems_without_writing_zeros():
+    video_history.record("t1", "S", "autopilot")
+    video_history.mark_published("t1", "yt1", "u")
+    with patch.object(
+        autopilot.youtube_metrics, "fetch_metrics", return_value=({}, ["statistics: boom"])
+    ):
+        autopilot.run_snapshots()
+    row = video_history.list_videos()[0][0]
+    assert row["views_24h"] is None and row["views"] is None
+    assert video_history.get_state("metrics_problems") == ["statistics: boom"]
+
+
+def test_topic_prompt_lists_24h_performers():
+    now = datetime.now().timestamp()
+    for index, views in enumerate([900, 10]):
+        video_history.record(f"t{index}", f"Tema {index}", "autopilot")
+        video_history.mark_published(f"t{index}", f"y{index}", "u")
+        video_history.update_metrics(f"y{index}", views=views, public_at=now - 86400 - 60)
+    prompt = autopilot._topic_prompt(autopilot.AutopilotSettings(), [])
+    assert "- Tema 0 (900 views in the first 24h)" in prompt
+    assert "- Tema 1 (10 views in the first 24h)" in prompt
 
 
 def test_first_tick_backfills_dispatched_schedule_topics_once():

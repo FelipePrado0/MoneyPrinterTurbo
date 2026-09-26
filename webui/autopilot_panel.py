@@ -196,6 +196,7 @@ def _render_history(tr) -> None:
                 "subject": row["subject"],
                 "status": tr(_VIDEO_STATUS_KEYS.get(row["status"], row["status"])),
                 "views": row["views"],
+                "views_24h": row["views_24h"],
                 "retention": row["avg_view_percentage"],
                 "link": row["youtube_url"],
                 "model": row["llm_model"] or "",
@@ -208,6 +209,9 @@ def _render_history(tr) -> None:
             "subject": st.column_config.TextColumn(tr("Autopilot Col Subject"), width="large"),
             "status": st.column_config.TextColumn(tr("Autopilot Col Status")),
             "views": st.column_config.NumberColumn(tr("Autopilot Col Views"), format="%d", width="small"),
+            "views_24h": st.column_config.NumberColumn(
+                tr("Autopilot Col Views 24h"), format="%d", width="small"
+            ),
             "retention": st.column_config.NumberColumn(
                 tr("Autopilot Col Retention"), format="%.0f%%", width="small"
             ),
@@ -220,6 +224,28 @@ def _render_history(tr) -> None:
     )
     if total > len(rows):
         st.caption(tr("Autopilot History Truncated").format(shown=len(rows), total=total))
+
+
+def _render_audience_corrections(tr, corrections: list[dict]) -> None:
+    """Comment text is untrusted: shown in a dataframe, never as markdown."""
+    if not corrections:
+        return
+    with st.expander(tr("Autopilot Audience Corrections").format(count=len(corrections))):
+        _dataframe(
+            [
+                {
+                    "claim": item["claim"],
+                    "link": f"https://www.youtube.com/watch?v={item['youtube_id']}&lc={item['comment_id']}",
+                }
+                for item in corrections
+            ],
+            {
+                "claim": st.column_config.TextColumn(tr("Autopilot Col Claim"), width="large"),
+                "link": st.column_config.LinkColumn(
+                    tr("Autopilot Col Link"), display_text=tr("Autopilot Open"), width="small"
+                ),
+            },
+        )
 
 
 @st.fragment(run_every="30s")
@@ -247,6 +273,7 @@ def render_dashboard(tr) -> None:
             icon=":material/warning:",
         )
 
+    _render_audience_corrections(tr, status["audience_corrections"])
     _render_today(tr, status)
     try:
         _render_history(tr)
