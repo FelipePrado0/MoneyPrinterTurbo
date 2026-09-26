@@ -571,3 +571,36 @@ def test_reload_if_changed_picks_up_edits_from_another_process(tmp_path, monkeyp
     finally:
         cfg.app.clear()
         cfg.app.update(saved)
+
+
+def test_env_secrets_override_config_but_never_reach_the_file(tmp_path, monkeypatch):
+    from app.config import config as cfg
+
+    path = tmp_path / "config.toml"
+    path.write_text(
+        '[app]\nopenrouter_api_key = "file-key"\npexels_api_keys = ["file-pexels"]\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(cfg, "config_file", str(path))
+    monkeypatch.setattr(cfg, "root_dir", str(tmp_path))
+    monkeypatch.setattr(cfg, "_config_mtime", None)
+    monkeypatch.setenv("MPT_OPENROUTER_API_KEY", "env-key")
+    monkeypatch.setenv("MPT_PEXELS_API_KEYS", "env-a, env-b")
+    saved_app, saved_cfg = dict(cfg.app), dict(cfg._cfg)
+    try:
+        cfg.reload_if_changed()
+        assert cfg.app["openrouter_api_key"] == "env-key"
+        assert cfg.app["pexels_api_keys"] == ["env-a", "env-b"]
+
+        cfg.app["llm_provider"] = "openrouter"
+        cfg.save_config()
+        written = path.read_text(encoding="utf-8")
+        assert "env-key" not in written and "env-a" not in written
+        assert "file-key" in written and "file-pexels" in written
+        assert 'llm_provider = "openrouter"' in written
+        assert cfg.app["openrouter_api_key"] == "env-key"
+    finally:
+        cfg.app.clear()
+        cfg.app.update(saved_app)
+        cfg._cfg.clear()
+        cfg._cfg.update(saved_cfg)

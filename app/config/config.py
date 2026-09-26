@@ -491,7 +491,7 @@ def save_config():
     """
     with _config_save_lock:
         config_to_save = dict(_cfg)
-        config_to_save["app"] = dict(app)
+        config_to_save["app"] = _strip_env_secrets(dict(app))
         config_to_save["azure"] = dict(azure)
         config_to_save["siliconflow"] = dict(siliconflow)
         config_to_save["minimax_tts"] = dict(minimax_tts)
@@ -578,25 +578,47 @@ project_description = _cfg.get(
 project_version = _cfg.get("project_version", __version__)
 reload_debug = False
 
+# Secrets can be injected via env var (Docker secret, .env, CI) instead of
+# sitting in plaintext in config.toml. A non-empty env var wins; save_config
+# writes the file's own value back so the env secret never lands on disk.
+_ENV_SECRET_OVERRIDES = {
+    "login_senha": "MPT_LOGIN_SENHA",
+    "youtube_client_id": "MPT_YOUTUBE_CLIENT_ID",
+    "youtube_client_secret": "MPT_YOUTUBE_CLIENT_SECRET",
+    "youtube_refresh_token": "MPT_YOUTUBE_REFRESH_TOKEN",
+    "openrouter_api_key": "MPT_OPENROUTER_API_KEY",
+    "pexels_api_keys": "MPT_PEXELS_API_KEYS",
+    "pixabay_api_keys": "MPT_PIXABAY_API_KEYS",
+}
+# Comma-separated in the env var, a list in config.toml.
+_ENV_LIST_KEYS = frozenset({"pexels_api_keys", "pixabay_api_keys"})
+
+
 def _apply_env_overrides():
     app["redis_host"] = os.getenv(
         "MPT_APP_REDIS_HOST",
         os.getenv("REDIS_HOST", app.get("redis_host", "localhost")),
     )
+    for key, env_name in _ENV_SECRET_OVERRIDES.items():
+        value = os.getenv(env_name)
+        if not value:
+            continue
+        if key in _ENV_LIST_KEYS:
+            app[key] = [item.strip() for item in value.split(",") if item.strip()]
+        else:
+            app[key] = value
 
-    # Secrets can be injected via env var (Docker secret, CI, etc.) instead of
-    # sitting in plaintext in config.toml. Env var wins when set; config.toml
-    # value is kept as fallback so existing setups keep working unchanged.
-    app["login_senha"] = os.getenv("MPT_LOGIN_SENHA", app.get("login_senha", ""))
-    app["youtube_client_id"] = os.getenv(
-        "MPT_YOUTUBE_CLIENT_ID", app.get("youtube_client_id", "")
-    )
-    app["youtube_client_secret"] = os.getenv(
-        "MPT_YOUTUBE_CLIENT_SECRET", app.get("youtube_client_secret", "")
-    )
-    app["youtube_refresh_token"] = os.getenv(
-        "MPT_YOUTUBE_REFRESH_TOKEN", app.get("youtube_refresh_token", "")
-    )
+
+def _strip_env_secrets(app_to_save: dict) -> dict:
+    file_app = _cfg.get("app", {})
+    for key, env_name in _ENV_SECRET_OVERRIDES.items():
+        if not os.getenv(env_name):
+            continue
+        if key in file_app:
+            app_to_save[key] = file_app[key]
+        else:
+            app_to_save.pop(key, None)
+    return app_to_save
 
 
 _apply_env_overrides()
