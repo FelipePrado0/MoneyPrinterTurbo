@@ -469,6 +469,7 @@ class TestYouTubeUploadService(unittest.TestCase):
             tags=["t"],
             privacy_status=None,
             publish_at=None,
+            made_for_kids=None,
         )
 
 

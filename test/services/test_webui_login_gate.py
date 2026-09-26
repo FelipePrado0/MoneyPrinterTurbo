@@ -29,7 +29,12 @@ def login_app(tmp_path, monkeypatch):
     # essa opção configurada. Isola igual ao login_email.
     config.app["login_senha"] = ""
     try:
-        with patch.object(config, "try_save_config", return_value=True):
+        # O idioma salvo no config.toml local vence o default "en" e trocaria o
+        # rótulo (e a key) do botão de login; o teste fixa o inglês.
+        with (
+            patch.object(config, "try_save_config", return_value=True),
+            patch.dict(config.ui, {"language": "en"}),
+        ):
             app = AppTest.from_file(str(WEBUI_MAIN), default_timeout=60)
             app.run()
             yield app, password

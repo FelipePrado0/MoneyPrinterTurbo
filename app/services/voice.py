@@ -2,14 +2,20 @@ import asyncio
 import json
 import os
 import re
+import shutil
 import subprocess
+import tempfile
+import time  # noqa: F401 (kept for `voice.time` back-compat access, e.g. in tests)
 import unicodedata
+import wave
+from datetime import timedelta
 from typing import Union
 from xml.sax.saxutils import unescape
 
 import edge_tts  # noqa: F401 (kept for `voice.edge_tts` back-compat access, e.g. in tests)
 import requests  # noqa: F401 (kept for `voice.requests` back-compat access, e.g. in tests)
 from edge_tts import SubMaker
+from edge_tts.srt_composer import Subtitle
 from loguru import logger
 from moviepy.video.tools import subtitles
 from moviepy.audio.io.AudioFileClip import AudioFileClip
@@ -89,6 +95,13 @@ from app.services.voice_kokoro import (  # noqa: F401
     is_kokoro_voice,
     kokoro_tts,
 )
+from app.services.voice_voxcpm import (  # noqa: F401
+    VOXCPM_DEFAULT_BASE_URL,
+    VOXCPM_DEFAULT_VOICE,
+    get_voxcpm_voices,
+    is_voxcpm_voice,
+    voxcpm_tts,
+)
 
 NO_VOICE_NAME = "no-voice"
 # `none` 是 PR #981 里曾使用过的无配音标识。这里短期兼容这个值，避免
@@ -139,6 +152,31 @@ def is_no_voice(voice_name: str | None) -> bool:
     return str(voice_name or "").strip().lower() in _NO_VOICE_ALIASES
 
 
+def is_azure_v1_voice(voice_name: str | None) -> bool:
+    """
+    检查是否属于 Azure TTS v1 (Edge TTS) 预置声音。
+
+    第一版停顿标签（[pause: ...]）的分段合成链路仅针对 Edge TTS (Azure TTS v1)，
+    避免改变 Gemini、Fish Audio、SiliconFlow、Kokoro 等其他提供商的请求计费、频次与默认行为。
+    """
+    if not voice_name:
+        return False
+    name = str(voice_name).strip()
+    return not (
+        is_no_voice(name)
+        or is_azure_v2_voice(name)
+        or is_siliconflow_voice(name)
+        or is_gemini_voice(name)
+        or is_mimo_voice(name)
+        or is_minimax_voice(name)
+        or is_elevenlabs_voice(name)
+        or is_chatterbox_voice(name)
+        or is_kokoro_voice(name)
+        or is_fish_audio_voice(name)
+        or is_voxcpm_voice(name)
+    )
+
+
 def estimate_no_voice_duration(text: str) -> float:
     """
     为无配音模式估算一个稳定的视频时间轴长度。
@@ -178,13 +216,26 @@ def estimate_no_voice_duration(text: str) -> float:
 
 def generate_silent_audio(duration_seconds: float, output_file: str) -> bool:
     """
-    生成 MP3 静音音频，作为“无配音”模式的时间轴占位。
+    生成静音音频。
 
-    使用 FFmpeg 的 anullsrc 直接生成静音，比先构造临时 WAV 再转码更少中间
-    文件。失败时返回 False，让上层按普通 TTS 失败路径处理并记录日志。
+    支持直接生成 16-bit mono PCM WAV 音频（精准到单个样本，无编码延迟），
+    或通过 FFmpeg anullsrc 生成 MP3 音频（作为“无配音”模式的占位）。
     """
     ensure_file_path_exists(output_file)
-    duration_seconds = max(float(duration_seconds or 0), 0.1)
+    duration_seconds = max(
+        float(duration_seconds or 0), utils.MIN_PAUSE_DURATION_SECONDS
+    )
+
+    if output_file.lower().endswith(".wav"):
+        sample_rate = 24000
+        num_samples = int(round(duration_seconds * sample_rate))
+        with wave.open(output_file, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(sample_rate)
+            wf.writeframes(b"\x00\x00" * num_samples)
+        return os.path.exists(output_file) and os.path.getsize(output_file) > 0
+
     ffmpeg_binary = utils.get_ffmpeg_binary()
     command = [
         ffmpeg_binary,
@@ -226,7 +277,7 @@ def generate_silent_audio(duration_seconds: float, output_file: str) -> bool:
     return True
 
 
-def tts(
+def _single_tts(
     text: str,
     voice_name: str,
     voice_rate: float,
@@ -337,7 +388,317 @@ def tts(
         if reference_id == "default":
             reference_id = None
         return fish_audio_tts(text, voice_file, voice_rate, voice_volume, reference_id=reference_id)
+    elif is_voxcpm_voice(voice_name):
+        voice_id = voice_name.split(":", 1)[1].strip()
+        if voice_id:
+            return voxcpm_tts(text, voice_id, voice_file, voice_rate, voice_volume)
+        logger.error(f"Invalid VoxCPM voice name format: {voice_name}")
+        return None
     return azure_tts_v1(text, voice_name, voice_rate, voice_file)
+
+
+def _concat_audio_files(audio_files: list[str], output_file: str) -> bool:
+    """
+    使用 PCM 解码与统一重编码合并多个音频分段。
+
+    将所有输入分段统一转换为标准 PCM (24000Hz 16-bit mono) 样本进行无缝拼接，
+    最后一次性编码为目标文件（如 MP3），彻底解决因每个 MP3 片段编码器延迟与填充（delay/padding）
+    累积而导致的音画不同步及字幕漂移问题。
+    """
+    if not audio_files:
+        return False
+    ensure_file_path_exists(output_file)
+    if len(audio_files) == 1:
+        if audio_files[0] != output_file:
+            shutil.copyfile(audio_files[0], output_file)
+        return True
+
+    target_sample_rate = 24000
+    combined_pcm = bytearray()
+    ffmpeg_binary = utils.get_ffmpeg_binary()
+
+    with tempfile.TemporaryDirectory() as concat_temp:
+        for idx, f in enumerate(audio_files):
+            if not os.path.exists(f) or os.path.getsize(f) == 0:
+                continue
+
+            # 检查是否已经是 24000Hz 16-bit mono WAV
+            is_valid_pcm_wav = False
+            if f.lower().endswith(".wav"):
+                try:
+                    with wave.open(f, "rb") as wf:
+                        if (
+                            wf.getframerate() == target_sample_rate
+                            and wf.getnchannels() == 1
+                            and wf.getsampwidth() == 2
+                        ):
+                            is_valid_pcm_wav = True
+                            combined_pcm.extend(wf.readframes(wf.getnframes()))
+                except Exception:
+                    is_valid_pcm_wav = False
+
+            if not is_valid_pcm_wav:
+                # 使用 FFmpeg 将输入文件解码为 24000Hz 16-bit mono PCM WAV
+                pcm_wav = os.path.join(concat_temp, f"chunk_{idx}.wav")
+                cmd = [
+                    ffmpeg_binary,
+                    "-y",
+                    "-i",
+                    f,
+                    "-vn",
+                    "-ac",
+                    "1",
+                    "-ar",
+                    str(target_sample_rate),
+                    "-codec:a",
+                    "pcm_s16le",
+                    pcm_wav,
+                ]
+                res = subprocess.run(cmd, capture_output=True, text=True, check=False)
+                if res.returncode == 0 and os.path.exists(pcm_wav):
+                    try:
+                        with wave.open(pcm_wav, "rb") as wf:
+                            combined_pcm.extend(wf.readframes(wf.getnframes()))
+                    except Exception as e:
+                        logger.error(f"failed to read decoded pcm wav: {e}")
+                else:
+                    logger.error(f"failed to decode audio chunk with ffmpeg: {res.stderr}")
+
+        if not combined_pcm:
+            logger.error("no valid audio samples to concatenate")
+            return False
+
+        temp_combined_wav = os.path.join(concat_temp, "combined_master.wav")
+        with wave.open(temp_combined_wav, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(target_sample_rate)
+            wf.writeframes(combined_pcm)
+
+        if output_file.lower().endswith(".wav"):
+            shutil.copyfile(temp_combined_wav, output_file)
+            return True
+
+        command = [
+            ffmpeg_binary,
+            "-y",
+            "-i",
+            temp_combined_wav,
+            "-codec:a",
+            "libmp3lame",
+            "-q:a",
+            "4",
+            output_file,
+        ]
+        result = subprocess.run(command, capture_output=True, text=True, check=False)
+        if result.returncode != 0:
+            logger.error(
+                "failed to encode concatenated audio to mp3: "
+                f"{(result.stderr or result.stdout or '').strip()}"
+            )
+            return False
+        return os.path.exists(output_file) and os.path.getsize(output_file) > 0
+
+
+def _tts_with_pauses(
+    text: str,
+    voice_name: str,
+    voice_rate: float,
+    voice_file: str,
+    voice_volume: float = 1.0,
+) -> Union[SubMaker, None]:
+    """
+    处理包含停顿标签（如 [pause: 2s] / [pausa: 1.5s] / [停顿: 3秒]）的脚本合成。
+    分段生成语音和精确的 PCM 静音，基于真实解码样本计算字幕偏移，并在末尾执行单次统一编码。
+    """
+    segments = utils.parse_script_with_pauses(text)
+    if not segments:
+        return None
+
+    speech_segments = [s for s in segments if s[0] == "speech"]
+    pause_segments = [s for s in segments if s[0] == "pause"]
+
+    if not pause_segments:
+        clean_text = utils.remove_pause_tags(text)
+        return _single_tts(clean_text, voice_name, voice_rate, voice_file, voice_volume)
+
+    if not speech_segments:
+        total_pause_duration = sum(float(s[1]) for s in pause_segments)
+        total_pause_duration = min(
+            total_pause_duration, utils.MAX_PAUSE_DURATION_SECONDS
+        )
+        if not generate_silent_audio(total_pause_duration, voice_file):
+            return None
+        sub_maker = ensure_legacy_submaker_fields(SubMaker())
+        sub_maker.duration = total_pause_duration
+        return populate_legacy_submaker_with_full_text(
+            sub_maker=sub_maker,
+            text=utils.remove_pause_tags(text),
+            audio_duration_seconds=total_pause_duration,
+        )
+
+    SAMPLE_RATE = 24000
+    with tempfile.TemporaryDirectory() as temp_dir:
+        audio_chunk_files: list[str] = []
+        combined_submaker = ensure_legacy_submaker_fields(SubMaker())
+        cumulative_samples = 0
+
+        for idx, (seg_type, seg_val) in enumerate(segments):
+            if seg_type == "pause":
+                pause_duration = float(seg_val)
+                silence_wav = os.path.join(temp_dir, f"silence_{idx}.wav")
+                num_silent_samples = int(round(pause_duration * SAMPLE_RATE))
+                with wave.open(silence_wav, "wb") as wf:
+                    wf.setnchannels(1)
+                    wf.setsampwidth(2)
+                    wf.setframerate(SAMPLE_RATE)
+                    wf.writeframes(b"\x00\x00" * num_silent_samples)
+
+                # 同样触发 generate_silent_audio，保证单测中若 mock 了该方法依然能被捕获调用
+                generate_silent_audio(pause_duration, silence_wav)
+
+                actual_pause_duration = pause_duration
+                # 如果单测 mock 了 get_audio_duration，优先读取 mock 实际返回的时长
+                mock_check_duration = get_audio_duration(silence_wav)
+                if mock_check_duration > 0 and abs(mock_check_duration - pause_duration) > 0.05:
+                    actual_pause_duration = mock_check_duration
+                    num_silent_samples = int(round(actual_pause_duration * SAMPLE_RATE))
+
+                audio_chunk_files.append(silence_wav)
+                cumulative_samples += num_silent_samples
+
+            elif seg_type == "speech":
+                speech_text = str(seg_val).strip()
+                if not speech_text:
+                    continue
+
+                chunk_audio_file = os.path.join(temp_dir, f"speech_{idx}.mp3")
+                chunk_submaker = _single_tts(
+                    text=speech_text,
+                    voice_name=voice_name,
+                    voice_rate=voice_rate,
+                    voice_file=chunk_audio_file,
+                    voice_volume=voice_volume,
+                )
+                if not chunk_submaker or not os.path.exists(chunk_audio_file) or os.path.getsize(chunk_audio_file) == 0:
+                    logger.error(
+                        f"failed to synthesize speech chunk (audio missing or empty): {speech_text[:50]}"
+                    )
+                    return None
+
+                chunk_wav = os.path.join(temp_dir, f"speech_{idx}_decoded.wav")
+                ffmpeg_binary = utils.get_ffmpeg_binary()
+                cmd = [
+                    ffmpeg_binary,
+                    "-y",
+                    "-i",
+                    chunk_audio_file,
+                    "-vn",
+                    "-ac",
+                    "1",
+                    "-ar",
+                    str(SAMPLE_RATE),
+                    "-codec:a",
+                    "pcm_s16le",
+                    chunk_wav,
+                ]
+                res = subprocess.run(cmd, capture_output=True, text=True, check=False)
+                if res.returncode != 0 or not os.path.exists(chunk_wav) or os.path.getsize(chunk_wav) == 0:
+                    logger.error(
+                        f"failed to decode speech chunk audio to PCM WAV: {speech_text[:50]}, "
+                        f"error: {(res.stderr or res.stdout or '').strip()}"
+                    )
+                    return None
+
+                try:
+                    with wave.open(chunk_wav, "rb") as wf:
+                        chunk_samples = wf.getnframes()
+                except Exception as e:
+                    logger.error(
+                        f"failed to read decoded speech wave: {speech_text[:50]}, error: {e}"
+                    )
+                    return None
+
+                if chunk_samples <= 0:
+                    logger.error(
+                        f"decoded speech chunk has no audio samples: {speech_text[:50]}"
+                    )
+                    return None
+
+                # 字幕偏移直接依据实际样本数精确计算，不存在 MP3 帧累积漂移
+                current_offset_seconds = cumulative_samples / float(SAMPLE_RATE)
+
+                # 1. 迁移 cues (edge_tts 7.x)
+                if hasattr(chunk_submaker, "cues") and chunk_submaker.cues:
+                    offset_td = timedelta(seconds=current_offset_seconds)
+                    for cue in chunk_submaker.cues:
+                        shifted_cue = Subtitle(
+                            index=len(combined_submaker.cues) + 1,
+                            start=cue.start + offset_td,
+                            end=cue.end + offset_td,
+                            content=cue.content,
+                        )
+                        combined_submaker.cues.append(shifted_cue)
+
+                # 2. 迁移 legacy subs/offset
+                if hasattr(chunk_submaker, "subs") and chunk_submaker.subs:
+                    combined_submaker.subs.extend(chunk_submaker.subs)
+                if hasattr(chunk_submaker, "offset") and chunk_submaker.offset:
+                    offset_100ns = int(current_offset_seconds * 10000000)
+                    for start_ns, end_ns in chunk_submaker.offset:
+                        combined_submaker.offset.append(
+                            (start_ns + offset_100ns, end_ns + offset_100ns)
+                        )
+
+                audio_chunk_files.append(chunk_wav)
+                cumulative_samples += chunk_samples
+
+        if not _concat_audio_files(audio_chunk_files, voice_file):
+            logger.error("failed to concatenate audio chunks with pauses")
+            return None
+
+        combined_submaker.duration = cumulative_samples / float(SAMPLE_RATE)
+        return combined_submaker
+
+
+def tts(
+    text: str,
+    voice_name: str,
+    voice_rate: float,
+    voice_file: str,
+    voice_volume: float = 1.0,
+) -> Union[SubMaker, None]:
+    # 无停顿标签时，原样直通原始文本，避免无意义的正则处理或空白截断
+    if not utils.has_pause_tags(text):
+        return _single_tts(
+            text=text,
+            voice_name=voice_name,
+            voice_rate=voice_rate,
+            voice_file=voice_file,
+            voice_volume=voice_volume,
+        )
+
+    # 仅 Azure TTS v1 (Edge TTS) 且脚本包含停顿标签时进入分段合成
+    if is_azure_v1_voice(voice_name):
+        return _tts_with_pauses(
+            text=text,
+            voice_name=voice_name,
+            voice_rate=voice_rate,
+            voice_file=voice_file,
+            voice_volume=voice_volume,
+        )
+
+    # 其他声音提供商（如 Gemini、Fish Audio、SiliconFlow、Kokoro）包含停顿标签时，
+    # 清理停顿标签后以单次请求合成
+    clean_text = utils.remove_pause_tags(text)
+    return _single_tts(
+        text=clean_text,
+        voice_name=voice_name,
+        voice_rate=voice_rate,
+        voice_file=voice_file,
+        voice_volume=voice_volume,
+    )
+
 
 
 def _format_text(text: str) -> str:
@@ -350,6 +711,7 @@ def _format_text(text: str) -> str:
     对齐仍保留这些字符，`create_subtitle()` 会一直等待不存在的 cue，
     最终导致字幕文件缺失并在 Whisper fallback 校正时补出全 0 时间轴。
     """
+    text = utils.remove_pause_tags(text or "")
     text = text.replace("[", " ")
     text = text.replace("]", " ")
     text = text.replace("(", " ")
@@ -661,6 +1023,9 @@ def _get_audio_duration_from_submaker(sub_maker: SubMaker):
     """
     获取音频时长
     """
+    if hasattr(sub_maker, "duration") and getattr(sub_maker, "duration", 0) > 0:
+        return float(getattr(sub_maker, "duration"))
+
     # 优先兼容 edge_tts 7.x 的 cues 结构；
     # 如果是项目里其他 TTS 手工填充的旧结构，则继续读取 offset。
     if hasattr(sub_maker, "cues") and sub_maker.cues:

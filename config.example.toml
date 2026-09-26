@@ -365,6 +365,13 @@ openrouter_free_fallback = true
 # Only ever call zero-price models (a paid model_name above is skipped).
 llm_free_only = true
 
+# API Route, an OpenAI-compatible multi-model routing platform.
+# API key: https://www.api-route.com
+# Model list: https://www.api-route.com/pricing
+api_route_api_key = ""
+api_route_base_url = ""
+api_route_model_name = ""
+
 # Ollama. Leave base_url empty to use the environment-aware local default.
 # Set model_name to a model installed by `ollama pull` or shown by `ollama list`.
 ollama_base_url = ""
@@ -638,6 +645,16 @@ voices = []
 # is subject to Fair Use Policy, rate limits, and time-limited promotional
 # windows (e.g. through August 2026).  There is no SLA.  Please check
 # https://fish.audio/pricing for current availability and commercial terms.
+
+[voxcpm]
+# ModelBest VoxCPM cloud TTS. Create an API Key and select a model with the
+# `speech_synthesis` capability at https://platform.modelbest.cn/console/
+# The Audio Speech API returns a streaming WAV response; MoneyPrinterTurbo
+# converts it to its internal MP3 voiceover format automatically.
+base_url = "https://api.modelbest.cn/v1"
+api_key = ""
+model_id = ""
+voice_id = "default"
 
 # =============================================================================
 # WebUI Preferences / WebUI 偏好
