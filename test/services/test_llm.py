@@ -311,7 +311,7 @@ class TestLiteLLMProvider(unittest.TestCase):
             get_llm_provider("gemini").default_model, "gemini-3.1-pro-preview"
         )
         openrouter = get_llm_provider("openrouter")
-        self.assertEqual(openrouter.default_model, "minimax/minimax-m3:free")
+        self.assertEqual(openrouter.default_model, "nvidia/nemotron-3-super-120b-a12b:free")
         self.assertEqual(openrouter.default_base_url, "https://openrouter.ai/api/v1")
         self.assertEqual(openrouter.adapter, "openai_compatible")
         self.assertTrue(openrouter.requires_api_key)
@@ -408,7 +408,7 @@ class TestLiteLLMProvider(unittest.TestCase):
             openrouter.api_key_url,
             "https://openrouter.ai/settings/keys",
         )
-        self.assertEqual(openrouter.default_model, "minimax/minimax-m3:free")
+        self.assertEqual(openrouter.default_model, "nvidia/nemotron-3-super-120b-a12b:free")
         self.assertEqual(openrouter.default_base_url, "https://openrouter.ai/api/v1")
 
     def test_provider_registry_uses_conventional_locale_and_config_keys(self):
@@ -1319,7 +1319,7 @@ class TestLiteLLMProvider(unittest.TestCase):
         self.assertEqual(
             fake_completions.kwargs,
             {
-                "model": "minimax/minimax-m3:free",
+                "model": "nvidia/nemotron-3-super-120b-a12b:free",
                 "messages": [{"role": "user", "content": "Say hello"}],
             },
         )

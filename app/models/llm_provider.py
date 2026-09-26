@@ -379,7 +379,7 @@ LLM_PROVIDER_REGISTRY = (
         "openrouter",
         "OpenRouter",
         api_key_url="https://openrouter.ai/settings/keys",
-        default_model="minimax/minimax-m3:free",
+        default_model="nvidia/nemotron-3-super-120b-a12b:free",
         default_base_url="https://openrouter.ai/api/v1",
     ),
     # 本地部署与通用网关
