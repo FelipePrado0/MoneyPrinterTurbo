@@ -578,24 +578,74 @@ project_description = _cfg.get(
 project_version = _cfg.get("project_version", __version__)
 reload_debug = False
 
-app["redis_host"] = os.getenv(
-    "MPT_APP_REDIS_HOST",
-    os.getenv("REDIS_HOST", app.get("redis_host", "localhost")),
-)
+def _apply_env_overrides():
+    app["redis_host"] = os.getenv(
+        "MPT_APP_REDIS_HOST",
+        os.getenv("REDIS_HOST", app.get("redis_host", "localhost")),
+    )
 
-# Secrets can be injected via env var (Docker secret, CI, etc.) instead of
-# sitting in plaintext in config.toml. Env var wins when set; config.toml
-# value is kept as fallback so existing setups keep working unchanged.
-app["login_senha"] = os.getenv("MPT_LOGIN_SENHA", app.get("login_senha", ""))
-app["youtube_client_id"] = os.getenv(
-    "MPT_YOUTUBE_CLIENT_ID", app.get("youtube_client_id", "")
-)
-app["youtube_client_secret"] = os.getenv(
-    "MPT_YOUTUBE_CLIENT_SECRET", app.get("youtube_client_secret", "")
-)
-app["youtube_refresh_token"] = os.getenv(
-    "MPT_YOUTUBE_REFRESH_TOKEN", app.get("youtube_refresh_token", "")
-)
+    # Secrets can be injected via env var (Docker secret, CI, etc.) instead of
+    # sitting in plaintext in config.toml. Env var wins when set; config.toml
+    # value is kept as fallback so existing setups keep working unchanged.
+    app["login_senha"] = os.getenv("MPT_LOGIN_SENHA", app.get("login_senha", ""))
+    app["youtube_client_id"] = os.getenv(
+        "MPT_YOUTUBE_CLIENT_ID", app.get("youtube_client_id", "")
+    )
+    app["youtube_client_secret"] = os.getenv(
+        "MPT_YOUTUBE_CLIENT_SECRET", app.get("youtube_client_secret", "")
+    )
+    app["youtube_refresh_token"] = os.getenv(
+        "MPT_YOUTUBE_REFRESH_TOKEN", app.get("youtube_refresh_token", "")
+    )
+
+
+_apply_env_overrides()
+
+_RELOADABLE_SECTIONS = {
+    "app": app,
+    "azure": azure,
+    "siliconflow": siliconflow,
+    "minimax_tts": minimax_tts,
+    "elevenlabs": elevenlabs,
+    "chatterbox": chatterbox,
+    "kokoro": kokoro,
+    "fish_audio": fish_audio,
+    "ui": ui,
+}
+
+
+def _current_config_mtime():
+    try:
+        return os.path.getmtime(config_file)
+    except OSError:
+        return None
+
+
+_config_mtime = _current_config_mtime()
+
+
+def reload_if_changed() -> bool:
+    """Re-read config.toml when another process (the WebUI) rewrote it.
+
+    The API process otherwise keeps the values it started with, so a model
+    or key changed in the WebUI would only apply after a restart. Sections
+    are updated in place so modules holding ``config.app`` see new values.
+    """
+    global _config_mtime
+    mtime = _current_config_mtime()
+    if mtime is None or mtime == _config_mtime:
+        return False
+    _config_mtime = mtime
+    fresh = _load_toml_config(config_file)
+    with _config_save_lock:
+        # ponytail: keys deleted from the file linger until restart; nothing
+        # in the app removes config keys today.
+        for name, section in _RELOADABLE_SECTIONS.items():
+            section.update(fresh.get(name, {}))
+        _cfg.update(fresh)
+        _apply_env_overrides()
+    logger.info("config.toml changed on disk, reloaded")
+    return True
 
 ffmpeg_path = app.get("ffmpeg_path", "")
 if ffmpeg_path and os.path.isfile(ffmpeg_path):

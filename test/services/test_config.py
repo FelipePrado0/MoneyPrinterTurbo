@@ -542,3 +542,32 @@ class TestConfigPersistence:
                     config.app.pop(key, None)
                 else:
                     config.app[key] = original_value
+
+
+def test_reload_if_changed_picks_up_edits_from_another_process(tmp_path, monkeypatch):
+    import os
+    import time
+
+    from app.config import config as cfg
+
+    path = tmp_path / "config.toml"
+    path.write_text('[app]\nllm_provider = "openrouter"\n', encoding="utf-8")
+    monkeypatch.setattr(cfg, "config_file", str(path))
+    monkeypatch.setattr(cfg, "_config_mtime", None)
+    monkeypatch.setenv("MPT_YOUTUBE_REFRESH_TOKEN", "from-env")
+    saved = dict(cfg.app)
+    try:
+        assert cfg.reload_if_changed() is True
+        assert cfg.app["llm_provider"] == "openrouter"
+        assert cfg.reload_if_changed() is False
+
+        path.write_text('[app]\nllm_provider = "gemini"\n', encoding="utf-8")
+        future = time.time() + 5
+        os.utime(path, (future, future))
+        assert cfg.reload_if_changed() is True
+        assert cfg.app["llm_provider"] == "gemini"
+        # Env-injected secrets survive the reload.
+        assert cfg.app["youtube_refresh_token"] == "from-env"
+    finally:
+        cfg.app.clear()
+        cfg.app.update(saved)
