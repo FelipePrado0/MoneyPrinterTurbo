@@ -1,0 +1,33 @@
+# Production (Ubuntu server): builds this fork's code and mounts only the
+# runtime state, so a `git pull` + rebuild never touches config or history.
+#   cp .env.example .env   # fill the secrets; COMPOSE_FILE selects this file
+#   docker compose up -d --build
+x-common: &common
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: moneyprinterturbo-fork:latest
+  environment:
+    - TZ=${TZ:-America/Sao_Paulo}
+  env_file:
+    - path: .env
+      required: false
+  volumes:
+    - ./config.toml:/MoneyPrinterTurbo/config.toml
+    - ./storage:/MoneyPrinterTurbo/storage
+  restart: always
+
+services:
+  webui:
+    <<: *common
+    container_name: "moneyprinterturbo-webui"
+    ports:
+      - "127.0.0.1:8501:8501"
+    command: [ "streamlit", "run", "./webui/Main.py", "--server.address=0.0.0.0", "--server.port=8501", "--browser.serverAddress=127.0.0.1", "--server.enableCORS=True", "--browser.gatherUsageStats=False", "--client.toolbarMode=minimal", "--logger.hideWelcomeMessage=True", "--server.showEmailPrompt=False" ]
+  api:
+    # Runs the scheduler and the autopilot; keep exactly one api replica.
+    <<: *common
+    container_name: "moneyprinterturbo-api"
+    ports:
+      - "127.0.0.1:8080:8080"
+    command: [ "python3", "main.py" ]
