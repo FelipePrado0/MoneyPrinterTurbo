@@ -264,8 +264,11 @@ class YouTubeUploadService:
         return value or DEFAULT_CATEGORY_ID
 
     @property
-    def made_for_kids(self) -> bool:
-        return bool(config.app.get("youtube_made_for_kids", False))
+    def made_for_kids(self):
+        # Raw value on purpose: bool("false") is True, so a TOML string would
+        # silently declare every video as made for kids. upload_video rejects
+        # anything that is not a real boolean.
+        return config.app.get("youtube_made_for_kids", False)
 
     @property
     def contains_synthetic_media(self) -> bool:
@@ -364,6 +367,14 @@ class YouTubeUploadService:
                 "error": f"Video file not found: {video_path}",
             }
 
+        resolved_made_for_kids = (
+            self.made_for_kids if made_for_kids is None else made_for_kids
+        )
+        if not isinstance(resolved_made_for_kids, bool):
+            error = "YouTube made-for-kids setting must be a boolean"
+            logger.error(error)
+            return {"success": False, "platform": PLATFORM, "error": error}
+
         resolved_privacy = normalize_privacy_status(
             privacy_status if privacy_status is not None else self.privacy_status
         )
@@ -378,9 +389,7 @@ class YouTubeUploadService:
             },
             "status": {
                 "privacyStatus": resolved_privacy,
-                "selfDeclaredMadeForKids": bool(
-                    self.made_for_kids if made_for_kids is None else made_for_kids
-                ),
+                "selfDeclaredMadeForKids": resolved_made_for_kids,
                 "containsSyntheticMedia": bool(
                     self.contains_synthetic_media
                     if contains_synthetic_media is None
@@ -558,6 +567,7 @@ def publish_video(
     tags: Iterable[Any] | None = None,
     privacy_status: str | None = None,
     publish_at: Any = None,
+    made_for_kids: bool | None = None,
 ) -> dict:
     # Single choke point for every upload (autopilot, WebUI, API, review
     # drafts), so the daily cap holds no matter who asked for the upload.
@@ -582,6 +592,7 @@ def publish_video(
         tags=tags,
         privacy_status=privacy_status,
         publish_at=publish_at,
+        made_for_kids=made_for_kids,
     )
     if isinstance(result, dict) and result.get("success"):
         try:

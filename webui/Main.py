@@ -125,6 +125,8 @@ DEFAULT_KOKORO_BASE_URL = "http://127.0.0.1:8880/v1"
 DEFAULT_KOKORO_MODEL = "kokoro"
 # empty = ask the server for its voice list (GET {base_url}/audio/voices)
 DEFAULT_KOKORO_VOICES: list[str] = []
+DEFAULT_VOXCPM_BASE_URL = voice.VOXCPM_DEFAULT_BASE_URL
+DEFAULT_VOXCPM_VOICE = voice.VOXCPM_DEFAULT_VOICE
 ONBOARDING_TOUR_KEY = "mpt-onboarding-v1"
 CUSTOM_LLM_ENDPOINT_ID = "custom"
 VOICE_MODE_TTS = "tts"
@@ -132,17 +134,17 @@ VOICE_MODE_UPLOAD = "upload"
 VOICE_MODE_NONE = "none"
 LOOMLOOM_MAX_POLL_FAILURES = 5
 # WebUI 按素材能力分组展示视频来源，但底层仍保存原有 video_source 值。
-# AI 视频组与设置页共用同一业务顺序：合作服务商优先，并按秘塔、胜算云、
-# 火山引擎排列；其余服务随后展示。这样用户在两个入口看到的顺序一致，同时
+# AI 视频组与设置页共用同一业务顺序：合作服务商优先，并按秘塔、OFox、
+# 胜算云、火山引擎排列；其余服务随后展示。这样两个入口的顺序一致，同时
 # 不改变 config.toml、历史任务和 API 请求中的字段语义，旧用户无需迁移配置。
 VIDEO_SOURCE_GROUPS = {
     "stock_video": ("pexels", "pixabay", "coverr"),
     "ai_video": (
         "metaso_minimax",
+        "ofox",
         "loomloom",
         "volcengine_seedance",
         "wavespeed",
-        "ofox",
     ),
     "ai_image": ("openai_image",),
     "local": ("local",),
@@ -164,6 +166,12 @@ YOUTUBE_CATEGORIES_URL = (
 # Upload-Post 只保留 YouTube 之外的平台，避免同一个成片被发布两次。
 UPLOAD_POST_PLATFORM_OPTIONS = ["tiktok", "instagram"]
 YOUTUBE_PRIVACY_STATUS_OPTIONS = ["public", "unlisted", "private"]
+
+# 素材设置与视频来源说明共用推广入口，避免两个位置的链接参数不一致。
+OFOX_REFERRAL_URL = (
+    "https://ofox.ai/?utm_source=github"
+    "&utm_medium=sponsorship&utm_content=moneyprinterturbo"
+)
 # “默认”是 WebUI 专用哨兵，不会写入 config.toml，也不会传给 FFmpeg。
 # 后端在 video_codec 未配置时继续采用稳定的 libx264；单独保留该哨兵可以区分
 # “跟随项目默认策略”和“用户明确固定 libx264”，便于未来安全调整默认策略。
@@ -260,6 +268,7 @@ _RUNTIME_CONFIG_SECTIONS = {
     "minimax_tts": config.minimax_tts,
     "siliconflow": config.siliconflow,
     "fish_audio": config.fish_audio,
+    "voxcpm": config.voxcpm,
     "ui": config.ui,
 }
 # 设置预设与密钥备份使用各自的文件标识。导入时先校验 schema 和版本，
@@ -1634,6 +1643,8 @@ def _infer_tts_server_from_voice(voice_name):
         return "kokoro"
     if voice.is_fish_audio_voice(voice_name):
         return "fish_audio"
+    if voice.is_voxcpm_voice(voice_name):
+        return "voxcpm"
     if voice.is_azure_v2_voice(voice_name):
         return "azure-tts-v2"
     return "azure-tts-v1"
@@ -2227,7 +2238,13 @@ def _render_generation_task_snapshot(task_id, task):
 
     st.success(tr("Video Generation Completed"))
     for warning in task.get("warnings") or []:
-        if isinstance(warning, Mapping) and warning.get("code") == "sonilo_bgm_failed":
+        if isinstance(warning, Mapping) and warning.get("code") == "batch_materials_reused":
+            st.warning(
+                tr("Batch Material Reuse Warning").format(
+                    index=warning.get("video_index", ""), count=warning.get("count", 0)
+                )
+            )
+        elif isinstance(warning, Mapping) and warning.get("code") == "sonilo_bgm_failed":
             st.warning(
                 tr("Sonilo BGM Fallback Warning").format(
                     index=warning.get("video_index", "")
@@ -2373,7 +2390,13 @@ def get_llm_provider_tips(provider_id, **kwargs):
             if service_endpoint
             else provider.effective_default_base_url
         ),
-        "model_docs_url": service_endpoint.model_docs_url if service_endpoint else "",
+        "model_docs_url": (
+            service_endpoint.model_docs_url
+            if service_endpoint and service_endpoint.model_docs_url
+            else provider.effective_model_docs_url(
+                prefer_international=tips_language == "en"
+            )
+        ),
         **{
             f"default_{field.config_suffix}": field.default_value
             for field in provider.extra_fields
@@ -3467,13 +3490,28 @@ def _render_settings_dialog():
                 _set_runtime_config("app", "youtube_category_id", youtube_category_id)
 
             youtube_saved_made_for_kids = config.app.get("youtube_made_for_kids", False)
-            youtube_made_for_kids = st.checkbox(
+            audience_labels = {
+                False: tr("Not Made for Kids"),
+                True: tr("Made for Kids"),
+            }
+            youtube_made_for_kids = st.selectbox(
                 tr("YouTube Made For Kids"),
-                value=youtube_saved_made_for_kids,
+                options=[False, True],
+                # Valor inválido (ex.: a string "false") fica sem seleção: nunca
+                # trocar a declaração de público sem o usuário escolher.
+                index=(
+                    int(youtube_saved_made_for_kids)
+                    if isinstance(youtube_saved_made_for_kids, bool)
+                    else None
+                ),
+                format_func=audience_labels.get,
                 help=tr("YouTube Made For Kids Help"),
-                key="youtube_made_for_kids_checkbox",
+                key="youtube_made_for_kids_selectbox",
             )
-            if youtube_made_for_kids != youtube_saved_made_for_kids:
+            if (
+                isinstance(youtube_made_for_kids, bool)
+                and youtube_made_for_kids is not youtube_saved_made_for_kids
+            ):
                 _set_runtime_config(
                     "app", "youtube_made_for_kids", youtube_made_for_kids
                 )
@@ -3916,7 +3954,7 @@ def _render_settings_dialog():
                 st.caption(tr("AI Video Generation APIs Help"))
 
                 # 视频生成 Provider 按赞助商优先展示，赞助商内部顺序
-                # 与商务约定保持一致：秘塔、胜算云、火山引擎。
+                # 与 VIDEO_SOURCE_GROUPS 一致：秘塔、OFox、胜算云、火山引擎。
                 st.markdown(f"**{tr('Metaso MiniMax H3')}**")
                 metaso_api_key = st.text_input(
                     tr("Metaso MiniMax API Key"),
@@ -3995,6 +4033,78 @@ def _render_settings_dialog():
                     _set_runtime_config(
                         "app", "metaso_minimax_resolution", metaso_resolution
                     )
+
+                st.divider()
+                st.markdown("**OfoxAI**")
+                st.caption(f"[OfoxAI]({OFOX_REFERRAL_URL}) · {tr('OFox AI Video Help')}")
+                ofox_api_key = st.text_input(
+                    tr("OFox API Key"),
+                    value=str(config.app.get("ofox_api_key", "") or ""),
+                    type="password",
+                    key="ofox_api_key_input",
+                )
+                _set_runtime_config("app", "ofox_api_key", ofox_api_key.strip())
+                ofox_model = st.text_input(
+                    tr("OFox Text-to-Video Model"),
+                    value=str(
+                        config.app.get(
+                            "ofox_text_to_video_model",
+                            ofox.DEFAULT_MODEL_ID,
+                        )
+                        or ofox.DEFAULT_MODEL_ID
+                    ),
+                    key="ofox_text_to_video_model_input",
+                )
+                _set_runtime_config(
+                    "app", "ofox_text_to_video_model", ofox_model.strip()
+                )
+                configured_ofox_base_url = str(
+                    config.app.get("ofox_base_url", ofox.DEFAULT_BASE_URL)
+                    or ofox.DEFAULT_BASE_URL
+                ).strip()
+                ofox_base_url = st.text_input(
+                    tr("OFox Base URL"),
+                    value=(
+                        ""
+                        if configured_ofox_base_url == ofox.DEFAULT_BASE_URL
+                        else configured_ofox_base_url
+                    ),
+                    placeholder=ofox.DEFAULT_BASE_URL,
+                    key="ofox_base_url_input",
+                )
+                _set_runtime_config(
+                    "app",
+                    "ofox_base_url",
+                    ofox_base_url.strip() or ofox.DEFAULT_BASE_URL,
+                )
+                ofox_vendor_options = [
+                    (tr("OFox Vendor BytePlus"), "byteplus"),
+                    (tr("OFox Vendor Volcengine"), "volcengine"),
+                    (tr("OFox Vendor Auto"), ""),
+                ]
+                configured_ofox_vendor = str(
+                    config.app.get("ofox_provider", ofox.DEFAULT_PROVIDER_TYPE)
+                    or ""
+                ).strip()
+                if configured_ofox_vendor not in {
+                    value for _, value in ofox_vendor_options
+                }:
+                    # 用户在 config.toml 手工钉定了其它厂商名时保留该选择，
+                    # 避免打开设置页就被下拉框覆盖回默认值。
+                    ofox_vendor_options.append(
+                        (configured_ofox_vendor, configured_ofox_vendor)
+                    )
+                selected_ofox_vendor = stable_selectbox(
+                    tr("OFox Upstream Vendor"),
+                    options=[value for _, value in ofox_vendor_options],
+                    default_value=configured_ofox_vendor,
+                    key="ofox_provider_select",
+                    format_func=lambda value: dict(
+                        (v, label) for label, v in ofox_vendor_options
+                    )[value],
+                    help=tr("OFox Upstream Vendor Help"),
+                )
+                _set_runtime_config("app", "ofox_provider", selected_ofox_vendor)
 
                 st.divider()
                 st.markdown(f"**{tr('Shengsuan Cloud AI Video')}**")
@@ -4113,76 +4223,6 @@ def _render_settings_dialog():
                 )
                 _save_material_api_keys("wavespeed_api_keys", wavespeed_api_key)
 
-                st.divider()
-                st.markdown("**OFox**")
-                ofox_api_key = st.text_input(
-                    tr("OFox API Key"),
-                    value=str(config.app.get("ofox_api_key", "") or ""),
-                    type="password",
-                    key="ofox_api_key_input",
-                )
-                _set_runtime_config("app", "ofox_api_key", ofox_api_key.strip())
-                ofox_model = st.text_input(
-                    tr("OFox Text-to-Video Model"),
-                    value=str(
-                        config.app.get(
-                            "ofox_text_to_video_model",
-                            ofox.DEFAULT_MODEL_ID,
-                        )
-                        or ofox.DEFAULT_MODEL_ID
-                    ),
-                    key="ofox_text_to_video_model_input",
-                )
-                _set_runtime_config(
-                    "app", "ofox_text_to_video_model", ofox_model.strip()
-                )
-                configured_ofox_base_url = str(
-                    config.app.get("ofox_base_url", ofox.DEFAULT_BASE_URL)
-                    or ofox.DEFAULT_BASE_URL
-                ).strip()
-                ofox_base_url = st.text_input(
-                    tr("OFox Base URL"),
-                    value=(
-                        ""
-                        if configured_ofox_base_url == ofox.DEFAULT_BASE_URL
-                        else configured_ofox_base_url
-                    ),
-                    placeholder=ofox.DEFAULT_BASE_URL,
-                    key="ofox_base_url_input",
-                )
-                _set_runtime_config(
-                    "app",
-                    "ofox_base_url",
-                    ofox_base_url.strip() or ofox.DEFAULT_BASE_URL,
-                )
-                ofox_vendor_options = [
-                    (tr("OFox Vendor BytePlus"), "byteplus"),
-                    (tr("OFox Vendor Volcengine"), "volcengine"),
-                    (tr("OFox Vendor Auto"), ""),
-                ]
-                configured_ofox_vendor = str(
-                    config.app.get("ofox_provider", ofox.DEFAULT_PROVIDER_TYPE)
-                    or ""
-                ).strip()
-                if configured_ofox_vendor not in {
-                    value for _, value in ofox_vendor_options
-                }:
-                    # 用户在 config.toml 手工钉定了其它厂商名时保留该选择，
-                    # 避免打开设置页就被下拉框覆盖回默认值。
-                    ofox_vendor_options.append(
-                        (configured_ofox_vendor, configured_ofox_vendor)
-                    )
-                selected_ofox_vendor = stable_selectbox(
-                    tr("OFox Upstream Vendor"),
-                    options=[value for _, value in ofox_vendor_options],
-                    default_value=configured_ofox_vendor,
-                    key="ofox_provider_select",
-                    format_func=lambda value: dict(
-                        (v, label) for label, v in ofox_vendor_options
-                    )[value],
-                    help=tr("OFox Upstream Vendor Help"),
-                )
-                _set_runtime_config("app", "ofox_provider", selected_ofox_vendor)
 
             with st.container(border=True):
                 st.markdown(f"#### {tr('AI Image Generation APIs')}")
@@ -5432,7 +5472,7 @@ def _render_video_settings(panel, params):
                 if params.video_source == "volcengine_seedance":
                     st.caption(tr("Volcano Engine Seedance Help"))
                 if params.video_source == "ofox":
-                    st.caption(tr("OFox AI Video Help"))
+                    st.caption(f"[OfoxAI]({OFOX_REFERRAL_URL}) · {tr('OFox AI Video Help')}")
                 if params.video_source == "metaso_minimax":
                     st.caption(tr("Metaso MiniMax H3 Help"))
 
@@ -5969,6 +6009,13 @@ def _get_voice_preview_provider_signature(tts_server: str) -> dict:
             "model_id": config.kokoro.get("model_id", ""),
             "credential": _credential_signature(config.kokoro.get("api_key", "")),
         }
+    if tts_server == "voxcpm":
+        return {
+            "base_url": config.voxcpm.get("base_url", ""),
+            "model_id": config.voxcpm.get("model_id", ""),
+            "voice_id": config.voxcpm.get("voice_id", "default"),
+            "credential": _credential_signature(config.voxcpm.get("api_key", "")),
+        }
     return {}
 
 
@@ -6439,6 +6486,26 @@ def _sync_elevenlabs_api_key_input():
     return entered_key
 
 
+def _sync_voxcpm_api_key_input():
+    """恢复 VoxCPM 密码控件在重连时被 Streamlit 重放的空状态。"""
+    widget_key = "voxcpm_api_key_input"
+    configured_key = str(config.voxcpm.get("api_key", "") or "").strip()
+    had_widget_state = widget_key in st.session_state
+    entered_key = str(st.session_state.get(widget_key, "") or "").strip()
+
+    if not entered_key and configured_key:
+        # 浏览器重连可能重放空密码状态。保留已保存凭据，避免本次 rerun
+        # 通过 _set_runtime_config 把 config.toml 中的有效 Key 覆盖为空。
+        st.session_state[widget_key] = configured_key
+        entered_key = configured_key
+        if had_widget_state:
+            logger.debug("restored VoxCPM API key after empty session replay")
+    elif not had_widget_state:
+        st.session_state[widget_key] = entered_key
+
+    return entered_key
+
+
 def _render_elevenlabs_api_key_input(label_key):
     """
     渲染 ElevenLabs TTS 与配乐共用的唯一 API Key 输入状态。
@@ -6829,6 +6896,7 @@ def _render_audio_settings(panel, params):
                 ("chatterbox", "Chatterbox TTS"),
                 ("kokoro", "Kokoro TTS"),
                 ("fish_audio", "Fish Audio TTS"),
+                ("voxcpm", "VoxCPM TTS"),
             ]
 
             tts_server_values = [server_value for server_value, _ in tts_servers]
@@ -6904,6 +6972,8 @@ def _render_audio_settings(panel, params):
                 filtered_voices = _get_kokoro_voice_options(saved_voice_name)
             elif selected_tts_server == "fish_audio":
                 filtered_voices = voice.get_fish_audio_voices()
+            elif selected_tts_server == "voxcpm":
+                filtered_voices = voice.get_voxcpm_voices()
             else:
                 # 获取Azure的声音列表
                 all_voices = voice.get_all_azure_voices(filter_locals=None)
@@ -6937,6 +7007,8 @@ def _render_audio_settings(panel, params):
                         display_name.replace("Female", tr("Female"))
                         .replace("Male", tr("Male"))
                     )
+                if voice.is_voxcpm_voice(v):
+                    return v.split(":", 1)[1] or DEFAULT_VOXCPM_VOICE
                 return (
                     v.replace("Female", tr("Female"))
                     .replace("Male", tr("Male"))
@@ -7158,6 +7230,42 @@ def _render_audio_settings(panel, params):
                 )
                 _set_runtime_config("fish_audio", "model", fish_model)
 
+            # ModelBest hosts VoxCPM behind its streaming Audio Speech API.
+            # The fixed provider endpoint is still editable for compatible
+            # gateways, while the user only has to supply an API key and a
+            # speech_synthesis-capable model id for the standard platform.
+            if tts_mode_enabled and (
+                selected_tts_server == "voxcpm"
+                or (voice_name and voice.is_voxcpm_voice(voice_name))
+            ):
+                _sync_voxcpm_api_key_input()
+                voxcpm_api_key = st.text_input(
+                    tr("VoxCPM API Key"),
+                    type="password",
+                    key="voxcpm_api_key_input",
+                )
+                _set_runtime_config("voxcpm", "api_key", voxcpm_api_key)
+
+                voxcpm_model = st.text_input(
+                    tr("VoxCPM Model ID"),
+                    value=config.voxcpm.get("model_id", ""),
+                    key="voxcpm_model_id_input",
+                    placeholder=tr("VoxCPM Model ID Placeholder"),
+                )
+                _set_runtime_config("voxcpm", "model_id", voxcpm_model.strip())
+
+                voxcpm_base_url = st.text_input(
+                    tr("VoxCPM Base URL"),
+                    value=config.voxcpm.get("base_url") or DEFAULT_VOXCPM_BASE_URL,
+                    key="voxcpm_base_url_input",
+                    placeholder=DEFAULT_VOXCPM_BASE_URL,
+                )
+                _set_runtime_config(
+                    "voxcpm",
+                    "base_url",
+                    (voxcpm_base_url or DEFAULT_VOXCPM_BASE_URL).strip().rstrip("/"),
+                )
+
             # Chatterbox API settings section (self-hosted, OpenAI-compatible)
             if tts_mode_enabled and (
                 selected_tts_server == "chatterbox"
@@ -7290,6 +7398,10 @@ def _render_audio_settings(panel, params):
                     )
 
                 with voice_control_cols[1]:
+                    is_voxcpm = bool(
+                        selected_tts_server == "voxcpm"
+                        or (voice_name and voice.is_voxcpm_voice(voice_name))
+                    )
                     params.voice_rate = stable_selectbox(
                         tr("Voiceover Speed"),
                         options=voice_rate_options,
@@ -7298,7 +7410,12 @@ def _render_audio_settings(panel, params):
                         ),
                         key="voice_rate_select",
                         format_func=lambda value: f"{value:.1f}×",
-                        help=tr("Voiceover Speed Help"),
+                        help=(
+                            tr("VoxCPM Speed Not Supported")
+                            if is_voxcpm
+                            else tr("Voiceover Speed Help")
+                        ),
+                        disabled=is_voxcpm,
                     )
                 _set_runtime_config("ui", "voice_volume", params.voice_volume)
                 _set_runtime_config("ui", "voice_rate", params.voice_rate)

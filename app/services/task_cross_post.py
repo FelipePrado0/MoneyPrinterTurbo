@@ -323,6 +323,7 @@ def _run_cross_post(
     youtube_description_override: str = "",
     youtube_tags_override: tuple[str, ...] = (),
     youtube_publish_offset_hours: float = 0.0,
+    youtube_made_for_kids: bool | None = None,
 ) -> None:
     """后台执行跨平台发布，并只补充发布相关的任务字段。"""
     results = []
@@ -412,6 +413,7 @@ def _run_cross_post(
                         tags=youtube_tags,
                         privacy_status=resolved_youtube_privacy,
                         publish_at=publish_at,
+                        made_for_kids=youtube_made_for_kids,
                     ),
                     youtube_upload.PLATFORM,
                     "YouTube returned an invalid response",
@@ -599,6 +601,7 @@ def _schedule_cross_post(
     platforms: list[str],
     publish_youtube: bool,
     youtube_privacy_status: str,
+    youtube_made_for_kids: bool | None = None,
 ) -> str | None:
     """提交后台发布任务；成功返回 None，调度失败返回可查询的错误原因。"""
     if not _cross_post_slots.acquire(blocking=False):
@@ -630,6 +633,7 @@ def _schedule_cross_post(
             params.youtube_description_override or "",
             tuple(params.youtube_tags_override or ()),
             params.youtube_publish_offset_hours or 0.0,
+            youtube_made_for_kids,
         )
         _register_cross_post_future(task_id, future)
         future.add_done_callback(partial(_finalize_cross_post_future, task_id))

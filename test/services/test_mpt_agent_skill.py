@@ -10,6 +10,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from app.models.llm_provider import LLM_PROVIDER_REGISTRY
+
 
 SKILL_SCRIPT = (
     Path(__file__).parent.parent.parent / "docs" / "skill" / "mpt_agent.py"
@@ -31,6 +33,9 @@ coverr_api_keys = []
 volcengine_seedance_api_key = ""
 ofox_api_key = ""
 metaso_minimax_api_key = ""
+openai_image_base_url = ""
+openai_image_model = ""
+openai_image_api_keys = []
 oneapi_api_key = ""
 oneapi_base_url = ""
 oneapi_model_name = ""
@@ -147,6 +152,55 @@ class TestMptAgentSkill(unittest.TestCase):
 
             self.assertEqual(default_missing, ["pexels_api_keys"])
             self.assertEqual(pixabay_missing, [])
+
+    def test_openai_image_source_accepts_keyless_local_gateway(self):
+        """文生图素材源只需要端点与模型名，本地网关允许不配置 API Key。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.toml"
+            config_path.write_text(
+                MINIMAL_CONFIG.replace(
+                    'moonshot_api_key = ""', 'moonshot_api_key = "configured"'
+                )
+                .replace(
+                    'openai_image_base_url = ""',
+                    'openai_image_base_url = "http://127.0.0.1:7860/v1"',
+                )
+                .replace(
+                    'openai_image_model = ""', 'openai_image_model = "local-sd"'
+                ),
+                encoding="utf-8",
+            )
+
+            _, missing = mpt_agent.missing_config(
+                config_path, ["--video-source", "openai_image"]
+            )
+
+            self.assertEqual(missing, [])
+
+    def test_missing_openai_image_inputs_report_endpoint_and_model(self):
+        """端点或模型名缺失时必须回报字段名，且不能把可选的 Key 当作缺失。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.toml"
+            config_path.write_text(
+                MINIMAL_CONFIG.replace(
+                    'moonshot_api_key = ""', 'moonshot_api_key = "configured"'
+                ),
+                encoding="utf-8",
+            )
+
+            _, missing = mpt_agent.missing_config(
+                config_path, ["--video-source", "openai_image"]
+            )
+            output = io.StringIO()
+            with redirect_stdout(output):
+                code = mpt_agent.report_missing_config("moonshot", missing)
+
+            self.assertEqual(
+                missing, ["openai_image_base_url", "openai_image_model"]
+            )
+            self.assertEqual(code, mpt_agent.NEEDS_INPUT_EXIT_CODE)
+            self.assertIn("OPENAI_IMAGE_REQUIRED=", output.getvalue())
+            self.assertNotIn("LLM_PROVIDER_OPTIONS_BEGIN", output.getvalue())
 
     def test_ofox_source_requires_key_and_explicit_charge_confirmation(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -350,6 +404,46 @@ class TestMptAgentSkill(unittest.TestCase):
                 config_path.read_text(encoding="utf-8"),
             )
             self.assertNotIn(secret, output.getvalue())
+
+    def test_keyless_providers_stay_aligned_with_the_provider_registry(self):
+        """辅助脚本的无 Key 集合必须与 Provider 注册表保持一致。"""
+        registry_keyless = {
+            provider.provider_id
+            for provider in LLM_PROVIDER_REGISTRY
+            if not provider.requires_api_key
+        }
+
+        self.assertEqual(mpt_agent.KEYLESS_LLM_PROVIDERS, registry_keyless)
+
+    def test_claude_code_subscription_provider_needs_no_api_key(self):
+        """
+        Claude Code 走本机订阅，辅助脚本不能再要求一把并不存在的 API Key。
+        """
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.toml"
+            config_path.write_text(
+                MINIMAL_CONFIG.replace(
+                    'llm_provider = "moonshot"', 'llm_provider = "claude_code"'
+                ).replace(
+                    'deepseek_api_key = ""',
+                    'deepseek_api_key = "already-configured-key"',
+                ).replace("pexels_api_keys = []", 'pexels_api_keys = ["pexels-key"]'),
+                encoding="utf-8",
+            )
+            output = io.StringIO()
+
+            with redirect_stdout(output):
+                provider = mpt_agent.reuse_existing_llm_provider(config_path)
+            active_provider, missing = mpt_agent.missing_config(config_path, [])
+
+            # 即使别的 Provider 已经配置了 Key，也不能悄悄把订阅用户切走。
+            self.assertEqual(provider, "claude_code")
+            self.assertEqual(active_provider, "claude_code")
+            self.assertEqual(missing, [])
+            self.assertIn(
+                'llm_provider = "claude_code"',
+                config_path.read_text(encoding="utf-8"),
+            )
 
     def test_only_missing_pexels_key_does_not_ask_for_llm_again(self):
         output = io.StringIO()
