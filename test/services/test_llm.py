@@ -1309,12 +1309,16 @@ class TestLiteLLMProvider(unittest.TestCase):
         with (
             patch.object(llm, "OpenAI", return_value=fake_client) as openai_client,
             patch.object(llm, "ChatCompletion", types.SimpleNamespace),
+            patch.object(llm.llm_free_models, "_fetch_catalog", return_value=[]),
         ):
+            llm.llm_free_models.reset_state()
             result = llm._generate_response("Say hello")
 
         openai_client.assert_called_once_with(
             api_key="openrouter-key",
             base_url="https://openrouter.ai/api/v1",
+            timeout=llm.OPENROUTER_REQUEST_TIMEOUT_SECONDS,
+            max_retries=0,
         )
         self.assertEqual(
             fake_completions.kwargs,

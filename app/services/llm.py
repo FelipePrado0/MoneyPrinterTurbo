@@ -6,17 +6,22 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
 from time import perf_counter
 from typing import List
 
 from loguru import logger
+import openai
 from openai import AzureOpenAI, OpenAI
 from openai.types.chat import ChatCompletion
 
 from app.config import config
 from app.models.llm_provider import DEFAULT_LLM_PROVIDER_ID, get_llm_provider
+from app.services import llm_free_models
 
 _max_retries = 5
+OPENROUTER_REQUEST_TIMEOUT_SECONDS = 90
+_last_used = threading.local()
 MIN_SCRIPT_PARAGRAPH_NUMBER = 1
 MAX_SCRIPT_PARAGRAPH_NUMBER = 10
 MAX_SCRIPT_PROMPT_LENGTH = 2000
@@ -608,6 +613,17 @@ def _generate_response(prompt: str, app_config=None) -> str:
             else:
                 raise Exception(f"[{llm_provider}] returned an empty response")
 
+        if llm_provider == "openrouter" and runtime_app_config.get(
+            "openrouter_free_fallback", True
+        ):
+            return _generate_openrouter_with_fallback(
+                prompt,
+                api_key=api_key,
+                base_url=base_url,
+                preferred_model=model_name,
+                free_only=bool(runtime_app_config.get("llm_free_only", True)),
+            )
+
         client = OpenAI(
             api_key=api_key,
             base_url=base_url,
@@ -616,6 +632,7 @@ def _generate_response(prompt: str, app_config=None) -> str:
         response = client.chat.completions.create(
             model=model_name, messages=[{"role": "user", "content": prompt}]
         )
+        _last_used.model = model_name
         if response:
             if isinstance(response, ChatCompletion):
                 return _extract_chat_completion_text(response, llm_provider)
@@ -631,6 +648,59 @@ def _generate_response(prompt: str, app_config=None) -> str:
 
     except Exception as e:
         return f"Error: {_sanitize_error_message(e)}"
+
+
+def get_last_used_model() -> str:
+    """Model that answered this thread's most recent LLM request."""
+    return getattr(_last_used, "model", "")
+
+
+def _generate_openrouter_with_fallback(
+    prompt: str,
+    *,
+    api_key: str,
+    base_url: str,
+    preferred_model: str,
+    free_only: bool,
+) -> str:
+    """Try models in ``llm_free_models`` order until one answers.
+
+    404/403/429/5xx/timeouts and empty answers move on to the next model;
+    an invalid key (401) stops immediately because every model would fail
+    the same way.
+    """
+    client = OpenAI(
+        api_key=api_key,
+        base_url=base_url,
+        timeout=OPENROUTER_REQUEST_TIMEOUT_SECONDS,
+        max_retries=0,
+    )
+    last_error: Exception | None = None
+    for model_name in llm_free_models.candidates(preferred_model, free_only):
+        try:
+            response = client.chat.completions.create(
+                model=model_name, messages=[{"role": "user", "content": prompt}]
+            )
+            text = _extract_chat_completion_text(response, "openrouter")
+        except openai.AuthenticationError:
+            raise
+        except (openai.NotFoundError, openai.PermissionDeniedError) as exc:
+            # 403 on OpenRouter is per model (e.g. a free slug gated to
+            # "agentic harnesses"), not a bad key: skip it like a 404.
+            llm_free_models.report_failure(model_name, "gone")
+            last_error = exc
+        except openai.RateLimitError as exc:
+            llm_free_models.report_failure(model_name, "rate_limited")
+            last_error = exc
+        except (openai.APIError, ValueError) as exc:
+            last_error = exc
+        else:
+            if model_name != preferred_model:
+                logger.warning(f"openrouter fallback answered with model: {model_name}")
+            _last_used.model = model_name
+            return text
+        logger.warning(f"openrouter model failed, trying next: {model_name}: {last_error}")
+    raise RuntimeError(f"all OpenRouter models failed, last error: {last_error}")
 
 
 def test_connection() -> tuple[bool, str, float]:

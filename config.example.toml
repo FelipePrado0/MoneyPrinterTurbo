@@ -358,6 +358,12 @@ evolink_model_name = ""
 openrouter_api_key = ""
 openrouter_base_url = ""
 openrouter_model_name = ""
+# When the model above fails (404 withdrawn, 429 rate limit, 5xx, timeout),
+# try the other free models from the live OpenRouter catalog, then the
+# "openrouter/free" router, instead of failing the request.
+openrouter_free_fallback = true
+# Only ever call zero-price models (a paid model_name above is skipped).
+llm_free_only = true
 
 # Ollama. Leave base_url empty to use the environment-aware local default.
 # Set model_name to a model installed by `ollama pull` or shown by `ollama list`.
