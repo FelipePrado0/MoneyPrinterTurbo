@@ -52,6 +52,23 @@ def test_dashboard_lists_today_and_history_and_pauses():
     assert at.button(key="autopilot_resume")
 
 
+def test_dashboard_shows_audience_corrections_as_plain_data():
+    from app.services import audience_comments
+
+    claim = "**tubarão** não é peixe [clique](https://evil.example)"
+    video_history.set_state(
+        audience_comments.STATE_KEY,
+        {"requests": [], "corrections": [{"comment_id": "c1", "youtube_id": "yt1", "claim": claim}]},
+    )
+    at = AppTest.from_function(_dashboard_app, default_timeout=30).run()
+    assert not at.exception
+    assert [e.label for e in at.expander] == ["Autopilot Audience Corrections"]
+    corrections = at.expander[0].dataframe[0].value
+    assert corrections.iloc[0]["claim"] == claim
+    assert corrections.iloc[0]["link"] == "https://www.youtube.com/watch?v=yt1&lc=c1"
+    assert all(claim not in m.value for m in at.markdown)
+
+
 def test_settings_form_saves_valid_values():
     at = AppTest.from_function(_settings_app, default_timeout=30).run()
     assert not at.exception

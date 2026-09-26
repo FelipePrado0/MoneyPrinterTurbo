@@ -571,6 +571,8 @@
     "Autopilot Metrics": "YouTube 지표를 매일 수집",
     "Autopilot Metrics Help": "조회수와 시청 지속률이 다음 주제 선택에 반영됩니다. refresh token에 youtube.readonly와 yt-analytics.readonly 범위가 필요합니다.",
     "Autopilot Metrics Problem": "지표가 불완전합니다: {error}",
+    "Autopilot Audience Corrections": "시청자가 최근 영상의 사실 {count}건에 이의를 제기했습니다",
+    "Autopilot Col Claim": "시청자가 틀렸다고 말하는 내용",
     "Autopilot Metrics Reauthorize": "지표를 읽으려면 YouTube 재인증이 필요합니다. OAuth Playground에서 youtube.upload, youtube.readonly, yt-analytics.readonly 범위로 새 refresh token을 만든 뒤 설정의 자동 게시 탭에 붙여 넣으세요.",
     "Autopilot Model Cooldown": "제한됨, 대기 중",
     "Autopilot Model Ok": "사용 가능",

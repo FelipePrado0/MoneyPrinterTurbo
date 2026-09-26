@@ -675,6 +675,8 @@
     "Autopilot Metrics": "Collect YouTube metrics daily",
     "Autopilot Metrics Help": "Views and retention feed the next topic choices. Needs the youtube.readonly and yt-analytics.readonly scopes on the refresh token.",
     "Autopilot Metrics Problem": "Metrics are incomplete: {error}",
+    "Autopilot Audience Corrections": "Viewers disputed {count} fact(s) in recent videos",
+    "Autopilot Col Claim": "What viewers say is wrong",
     "Autopilot Metrics Reauthorize": "Metrics need a new YouTube authorization. Generate a new refresh token in the OAuth Playground with the youtube.upload, youtube.readonly and yt-analytics.readonly scopes, then paste it in Settings, Auto-publish tab.",
     "Autopilot Model Cooldown": "Rate limited, waiting",
     "Autopilot Model Ok": "Available",

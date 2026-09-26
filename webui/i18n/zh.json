@@ -589,6 +589,8 @@
     "Autopilot Metrics": "每天采集 YouTube 数据",
     "Autopilot Metrics Help": "播放量和留存率会影响后续主题选择。refresh token 需要 youtube.readonly 和 yt-analytics.readonly 权限范围。",
     "Autopilot Metrics Problem": "数据不完整：{error}",
+    "Autopilot Audience Corrections": "观众对近期视频中的 {count} 个事实提出了质疑",
+    "Autopilot Col Claim": "观众认为错误的内容",
     "Autopilot Metrics Reauthorize": "数据采集需要重新授权 YouTube。请在 OAuth Playground 中使用 youtube.upload、youtube.readonly 和 yt-analytics.readonly 权限生成新的 refresh token，并粘贴到设置的自动发布标签页。",
     "Autopilot Model Cooldown": "已限流，等待中",
     "Autopilot Model Ok": "可用",

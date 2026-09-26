@@ -571,6 +571,8 @@
     "Autopilot Metrics": "Collecter les statistiques YouTube chaque jour",
     "Autopilot Metrics Help": "Les vues et la rétention orientent les prochains sujets. Nécessite les scopes youtube.readonly et yt-analytics.readonly sur le refresh token.",
     "Autopilot Metrics Problem": "Statistiques incomplètes : {error}",
+    "Autopilot Audience Corrections": "Le public a contesté {count} fait(s) dans des vidéos récentes",
+    "Autopilot Col Claim": "Ce que le public juge faux",
     "Autopilot Metrics Reauthorize": "Les statistiques exigent une nouvelle autorisation YouTube. Générez un nouveau refresh token dans l'OAuth Playground avec les scopes youtube.upload, youtube.readonly et yt-analytics.readonly, puis collez-le dans Réglages, onglet Publication automatique.",
     "Autopilot Model Cooldown": "Limité, en attente",
     "Autopilot Model Ok": "Disponible",

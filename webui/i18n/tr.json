@@ -571,6 +571,8 @@
     "Autopilot Metrics": "YouTube metriklerini her gün topla",
     "Autopilot Metrics Help": "Görüntüleme ve izlenme oranı sonraki konu seçimlerini yönlendirir. Refresh token'da youtube.readonly ve yt-analytics.readonly kapsamları gerekir.",
     "Autopilot Metrics Problem": "Metrikler eksik: {error}",
+    "Autopilot Audience Corrections": "İzleyiciler son videolardaki {count} bilgiye itiraz etti",
+    "Autopilot Col Claim": "İzleyicilerin yanlış dediği",
     "Autopilot Metrics Reauthorize": "Metrikler için yeni bir YouTube yetkilendirmesi gerekiyor. OAuth Playground'da youtube.upload, youtube.readonly ve yt-analytics.readonly kapsamlarıyla yeni bir refresh token oluşturup Ayarlar, Otomatik yayın sekmesine yapıştırın.",
     "Autopilot Model Cooldown": "Sınırlandı, bekliyor",
     "Autopilot Model Ok": "Kullanılabilir",

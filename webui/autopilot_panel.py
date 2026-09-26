@@ -226,6 +226,28 @@ def _render_history(tr) -> None:
         st.caption(tr("Autopilot History Truncated").format(shown=len(rows), total=total))
 
 
+def _render_audience_corrections(tr, corrections: list[dict]) -> None:
+    """Comment text is untrusted: shown in a dataframe, never as markdown."""
+    if not corrections:
+        return
+    with st.expander(tr("Autopilot Audience Corrections").format(count=len(corrections))):
+        _dataframe(
+            [
+                {
+                    "claim": item["claim"],
+                    "link": f"https://www.youtube.com/watch?v={item['youtube_id']}&lc={item['comment_id']}",
+                }
+                for item in corrections
+            ],
+            {
+                "claim": st.column_config.TextColumn(tr("Autopilot Col Claim"), width="large"),
+                "link": st.column_config.LinkColumn(
+                    tr("Autopilot Col Link"), display_text=tr("Autopilot Open"), width="small"
+                ),
+            },
+        )
+
+
 @st.fragment(run_every="30s")
 def render_dashboard(tr) -> None:
     toast = st.session_state.pop("autopilot_toast", None)
@@ -251,6 +273,7 @@ def render_dashboard(tr) -> None:
             icon=":material/warning:",
         )
 
+    _render_audience_corrections(tr, status["audience_corrections"])
     _render_today(tr, status)
     try:
         _render_history(tr)

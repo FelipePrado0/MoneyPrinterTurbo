@@ -110,6 +110,17 @@ def _connect(db_path: str | None) -> sqlite3.Connection:
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS video_comments (
+            comment_id TEXT PRIMARY KEY,
+            youtube_id TEXT NOT NULL,
+            author_channel_id TEXT,
+            text TEXT NOT NULL,
+            like_count INTEGER NOT NULL DEFAULT 0,
+            published_at REAL,
+            synced_at REAL NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_video_comments_published
+            ON video_comments (published_at);
         """
     )
     existing = {row[1] for row in conn.execute("PRAGMA table_info(videos)")}
@@ -385,6 +396,54 @@ def performers(limit: int = 5, db_path: str | None = None) -> tuple[list, list]:
         bottom = conn.execute(query.format(order="ASC"), (STATUS_PUBLISHED, size)).fetchall()
     return [_row_to_dict(r) for r in top], [_row_to_dict(r) for r in bottom]
 
+
+
+def public_youtube_ids_since(since: float, db_path: str | None = None) -> list[str]:
+    """Published videos YouTube made public at or after ``since``."""
+    with closing(_connect(db_path)) as conn:
+        rows = conn.execute(
+            "SELECT youtube_id FROM videos WHERE status = ? AND youtube_id IS NOT NULL "
+            "AND public_at >= ? ORDER BY public_at DESC",
+            (STATUS_PUBLISHED, since),
+        ).fetchall()
+    return [row[0] for row in rows]
+
+
+_COMMENT_COLUMNS = (
+    "comment_id",
+    "youtube_id",
+    "author_channel_id",
+    "text",
+    "like_count",
+    "published_at",
+)
+
+
+def add_comments(comments: list[dict], db_path: str | None = None) -> int:
+    """Insert comments not seen yet; returns how many were new."""
+    if not comments:
+        return 0
+    now = time.time()
+    with closing(_connect(db_path)) as conn:
+        before = conn.total_changes
+        conn.executemany(
+            f"INSERT OR IGNORE INTO video_comments ({', '.join(_COMMENT_COLUMNS)}, synced_at) "
+            f"VALUES ({', '.join('?' * (len(_COMMENT_COLUMNS) + 1))})",
+            [tuple(c.get(col) for col in _COMMENT_COLUMNS) + (now,) for c in comments],
+        )
+        conn.commit()
+        return conn.total_changes - before
+
+
+def comments_since(since: float, limit: int = 200, db_path: str | None = None) -> list[dict]:
+    """Comments published at or after ``since``, newest first."""
+    with closing(_connect(db_path)) as conn:
+        rows = conn.execute(
+            f"SELECT {', '.join(_COMMENT_COLUMNS)} FROM video_comments "
+            "WHERE published_at >= ? ORDER BY published_at DESC, comment_id LIMIT ?",
+            (since, limit),
+        ).fetchall()
+    return [dict(zip(_COMMENT_COLUMNS, row)) for row in rows]
 
 
 def get_state(key: str, default=None, db_path: str | None = None):

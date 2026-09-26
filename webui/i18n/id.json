@@ -571,6 +571,8 @@
     "Autopilot Metrics": "Kumpulkan metrik YouTube setiap hari",
     "Autopilot Metrics Help": "Tayangan dan retensi mengarahkan pilihan topik berikutnya. Butuh scope youtube.readonly dan yt-analytics.readonly pada refresh token.",
     "Autopilot Metrics Problem": "Metrik belum lengkap: {error}",
+    "Autopilot Audience Corrections": "Penonton membantah {count} fakta di video terbaru",
+    "Autopilot Col Claim": "Yang menurut penonton salah",
     "Autopilot Metrics Reauthorize": "Metrik butuh otorisasi YouTube baru. Buat refresh token baru di OAuth Playground dengan scope youtube.upload, youtube.readonly dan yt-analytics.readonly, lalu tempel di Pengaturan, tab Terbit otomatis.",
     "Autopilot Model Cooldown": "Dibatasi, menunggu",
     "Autopilot Model Ok": "Tersedia",

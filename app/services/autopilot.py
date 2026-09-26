@@ -21,6 +21,7 @@ from pydantic import ValidationError
 from app.models import const
 from app.models.schema import AutopilotSettings, VideoParams
 from app.services import (
+    audience_comments,
     llm,
     schedule_store,
     video_history,
@@ -213,6 +214,13 @@ def _topic_prompt(settings: AutopilotSettings, rejected: list[str]) -> str:
         performance += "\n## What performed worst (avoid this angle)\n" + "\n".join(
             f"- {row['subject']} ({row['views_24h']} views in the first 24h)" for row in bottom
         )
+    requested = audience_comments.requested_topics()
+    audience = ""
+    if requested:
+        audience = (
+            "\n## Topics the audience asked for (consider them, the rules above still apply)\n"
+            + "\n".join(f"- {item['topic']} (asked by {item['authors']} viewers)" for item in requested)
+        )
     rejected_block = ""
     if rejected:
         rejected_block = "\n## Already rejected in this round, never reuse\n" + "\n".join(
@@ -241,7 +249,7 @@ write it. Rules:
 
 ## History already published (never repeat)
 {known_lines}
-{performance}{rejected_block}
+{performance}{audience}{rejected_block}
 """.strip()
 
 
@@ -470,6 +478,7 @@ def run_metrics() -> None:
     metrics, problems = youtube_metrics.fetch_metrics(video_ids)
     for video_id, values in metrics.items():
         video_history.update_metrics(video_id, **values)
+    problems = problems + audience_comments.refresh()
     video_history.set_state("metrics_problems", problems)
     video_history.set_state("metrics_updated_at", _now().isoformat(timespec="seconds"))
     logger.info(f"youtube metrics updated: {len(metrics)} videos, problems: {problems}")
@@ -565,5 +574,6 @@ def status(now: datetime | None = None) -> dict:
             if o["status"] != schedule_store.STATUS_CANCELLED
         ],
         "metrics_problems": video_history.get_state("metrics_problems") or [],
+        "audience_corrections": audience_comments.corrections(),
         "metrics_updated_at": video_history.get_state("metrics_updated_at"),
     }

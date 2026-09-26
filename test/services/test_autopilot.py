@@ -223,7 +223,7 @@ def test_run_metrics_updates_history_and_records_problems():
         autopilot.youtube_metrics,
         "fetch_metrics",
         return_value=({"yt1": {"views": 42, "likes": 3, "comments": 1}}, ["needs_reauthorization"]),
-    ):
+    ), patch.object(autopilot.audience_comments, "refresh", return_value=[]):
         autopilot.run_metrics()
     assert video_history.list_videos()[0][0]["views"] == 42
     assert video_history.get_state("metrics_problems") == ["needs_reauthorization"]

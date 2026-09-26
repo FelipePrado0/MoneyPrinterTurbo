@@ -571,6 +571,8 @@
     "Autopilot Metrics": "Собирать метрики YouTube ежедневно",
     "Autopilot Metrics Help": "Просмотры и удержание влияют на выбор следующих тем. Нужны области youtube.readonly и yt-analytics.readonly в refresh token.",
     "Autopilot Metrics Problem": "Метрики неполные: {error}",
+    "Autopilot Audience Corrections": "Зрители оспорили фактов в недавних видео: {count}",
+    "Autopilot Col Claim": "Что зрители считают ошибкой",
     "Autopilot Metrics Reauthorize": "Для метрик нужна новая авторизация YouTube. Создайте новый refresh token в OAuth Playground с областями youtube.upload, youtube.readonly и yt-analytics.readonly и вставьте его в Настройки, вкладка Автопубликация.",
     "Autopilot Model Cooldown": "Ограничена, ожидание",
     "Autopilot Model Ok": "Доступна",
