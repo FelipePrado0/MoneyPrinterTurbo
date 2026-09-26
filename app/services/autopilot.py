@@ -208,10 +208,10 @@ def _topic_prompt(settings: AutopilotSettings, rejected: list[str]) -> str:
     performance = ""
     if top:
         performance = "\n## What performed best (make more like these)\n" + "\n".join(
-            f"- {row['subject']} ({row['views']} views)" for row in top
+            f"- {row['subject']} ({row['views_24h']} views in the first 24h)" for row in top
         )
         performance += "\n## What performed worst (avoid this angle)\n" + "\n".join(
-            f"- {row['subject']} ({row['views']} views)" for row in bottom
+            f"- {row['subject']} ({row['views_24h']} views in the first 24h)" for row in bottom
         )
     rejected_block = ""
     if rejected:
@@ -475,6 +475,19 @@ def run_metrics() -> None:
     logger.info(f"youtube metrics updated: {len(metrics)} videos, problems: {problems}")
 
 
+def run_snapshots() -> None:
+    """Hourly: fill the 24h/7d view snapshots of recently published videos."""
+    video_ids = video_history.snapshot_candidates()
+    if not video_ids:
+        return
+    metrics, problems = youtube_metrics.fetch_metrics(video_ids, statistics_only=True)
+    for video_id, values in metrics.items():
+        video_history.update_metrics(video_id, **values)
+    if problems:
+        # Only report here; the daily run_metrics clears them once it works.
+        video_history.set_state("metrics_problems", problems)
+
+
 def run_backup() -> None:
     target = video_history.backup_database(
         os.path.join(utils.storage_dir(create=True), "backups"), keep=BACKUP_KEEP_DAYS
@@ -517,6 +530,10 @@ def tick(now: datetime, submit) -> None:
     ):
         video_history.set_state("metrics_date", today)
         submit(run_metrics)
+    hour = now.strftime("%Y-%m-%dT%H")
+    if settings.metrics_enabled and video_history.get_state("snapshot_hour") != hour:
+        video_history.set_state("snapshot_hour", hour)
+        submit(run_snapshots)
     if video_history.get_state("backup_date") != today:
         video_history.set_state("backup_date", today)
         submit(run_backup)

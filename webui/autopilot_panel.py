@@ -196,6 +196,7 @@ def _render_history(tr) -> None:
                 "subject": row["subject"],
                 "status": tr(_VIDEO_STATUS_KEYS.get(row["status"], row["status"])),
                 "views": row["views"],
+                "views_24h": row["views_24h"],
                 "retention": row["avg_view_percentage"],
                 "link": row["youtube_url"],
                 "model": row["llm_model"] or "",
@@ -208,6 +209,9 @@ def _render_history(tr) -> None:
             "subject": st.column_config.TextColumn(tr("Autopilot Col Subject"), width="large"),
             "status": st.column_config.TextColumn(tr("Autopilot Col Status")),
             "views": st.column_config.NumberColumn(tr("Autopilot Col Views"), format="%d", width="small"),
+            "views_24h": st.column_config.NumberColumn(
+                tr("Autopilot Col Views 24h"), format="%d", width="small"
+            ),
             "retention": st.column_config.NumberColumn(
                 tr("Autopilot Col Retention"), format="%.0f%%", width="small"
             ),
