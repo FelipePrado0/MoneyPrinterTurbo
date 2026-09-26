@@ -13,8 +13,9 @@ from uuid import uuid4
 
 from loguru import logger
 
+from app.config import config
 from app.models.schema import VideoParams
-from app.services import schedule_store
+from app.services import autopilot, schedule_store, video_history
 from app.services import task as task_service
 from app.services import trend_topic
 
@@ -52,7 +53,9 @@ def _dispatch_occurrence(occurrence: dict) -> None:
         return
 
     if params.video_subject == trend_topic.AUTO_TOPIC_SENTINEL:
-        recent_topics = schedule_store.list_recent_resolved_topics()
+        recent_topics = schedule_store.list_recent_resolved_topics() + [
+            subject for subject, _ in video_history.known_topics()
+        ]
         resolved_topic = trend_topic.pick_topic(recent_topics)
         params.video_subject = resolved_topic
         # Best-effort: even if this write is lost, the resolved topic still
@@ -79,15 +82,30 @@ def _dispatch_occurrence(occurrence: dict) -> None:
 
 def _poll_once() -> None:
     try:
+        config.reload_if_changed()
+    except Exception as exc:
+        logger.warning(f"failed to reload config.toml: {exc}")
+
+    now = datetime.now()
+    try:
+        autopilot.tick(now, _dispatch_executor.submit)
+    except Exception as exc:
+        # O piloto nunca pode travar os agendamentos manuais do mesmo poller.
+        logger.exception(f"autopilot tick failed: {exc}")
+
+    try:
         claimed = schedule_store.claim_due_occurrences(
-            now=datetime.now(), task_id_factory=lambda: uuid4().hex
+            now=now, task_id_factory=lambda: uuid4().hex
         )
     except Exception as exc:
         logger.exception(f"failed to poll schedule occurrences: {exc}")
         return
 
     for occurrence in claimed:
-        _dispatch_executor.submit(_dispatch_occurrence, occurrence)
+        if autopilot.is_autopilot_occurrence(occurrence):
+            _dispatch_executor.submit(autopilot.dispatch, occurrence)
+        else:
+            _dispatch_executor.submit(_dispatch_occurrence, occurrence)
 
 
 def _poll_loop() -> None:

@@ -131,6 +131,7 @@ def test_poll_once_submits_every_claimed_occurrence():
             scheduler.schedule_store, "claim_due_occurrences", return_value=claimed
         ),
         patch.object(scheduler, "_dispatch_executor") as executor,
+        patch.object(scheduler.autopilot, "tick"),
     ):
         scheduler._poll_once()
 
@@ -146,3 +147,42 @@ def test_poll_once_does_not_raise_when_store_fails():
         side_effect=RuntimeError("db locked"),
     ):
         scheduler._poll_once()  # nao deve levantar, so logar
+
+
+def test_poll_once_routes_autopilot_occurrences_and_ticks_autopilot():
+    manual = _occurrence(id=1, group_id="group-1")
+    auto = _occurrence(id=2, group_id="autopilot-2026-09-25")
+    submitted = []
+
+    with (
+        patch.object(scheduler.config, "reload_if_changed") as reload_config,
+        patch.object(scheduler.autopilot, "tick") as tick,
+        patch.object(
+            scheduler.schedule_store, "claim_due_occurrences", return_value=[manual, auto]
+        ),
+        patch.object(
+            scheduler._dispatch_executor,
+            "submit",
+            side_effect=lambda fn, *args: submitted.append((fn, args)),
+        ),
+    ):
+        scheduler._poll_once()
+
+    reload_config.assert_called_once()
+    tick.assert_called_once()
+    assert (scheduler._dispatch_occurrence, (manual,)) in submitted
+    assert (scheduler.autopilot.dispatch, (auto,)) in submitted
+
+
+def test_poll_once_keeps_dispatching_when_autopilot_tick_fails():
+    with (
+        patch.object(scheduler.config, "reload_if_changed"),
+        patch.object(scheduler.autopilot, "tick", side_effect=RuntimeError("db locked")),
+        patch.object(
+            scheduler.schedule_store, "claim_due_occurrences", return_value=[_occurrence()]
+        ),
+        patch.object(scheduler._dispatch_executor, "submit") as submit,
+    ):
+        scheduler._poll_once()
+
+    submit.assert_called_once()

@@ -64,3 +64,22 @@ def notify_video_published(
             f"failed to notify publish webhook, task_id: {task_id}, "
             f"video_id: {video_id}, error: {exc}"
         )
+
+
+def notify_event(event: str, data: dict[str, Any]) -> None:
+    """POST a generic ``{"event", "success", ...}`` payload; never raises.
+
+    Same webhook as ``notify_video_published`` so one n8n flow receives both
+    publish confirmations and autopilot alerts, told apart by ``event``.
+    """
+    webhook_url = _webhook_url()
+    if not webhook_url:
+        return
+    payload: dict[str, Any] = {"event": event, "success": False, **data}
+    try:
+        response = requests.post(
+            webhook_url, json=payload, timeout=WEBHOOK_TIMEOUT_SECONDS
+        )
+        response.raise_for_status()
+    except Exception as exc:
+        logger.warning(f"failed to notify webhook, event: {event}, error: {exc}")

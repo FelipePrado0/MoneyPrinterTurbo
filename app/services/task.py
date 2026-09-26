@@ -89,6 +89,9 @@ _VIDEO_MUSIC_PROVIDERS = {
 }
 
 
+QUALITY_GATE_STAGE = "quality_gate"
+
+
 def _get_video_music_prompt(params: VideoParams) -> str:
     """
     读取当前视频配乐供应商实际使用的提示词。
@@ -836,6 +839,7 @@ def _run_pipeline(
     voice_preview: dict | None = None,
     loomloom_video_request: loomloom.LoomLoomConfirmedVideoRequest | None = None,
     allow_server_file_input: bool = False,
+    pre_publish_check=None,
 ):
     logger.info(f"start task: {task_id}, stop_at: {stop_at}")
     sm.state.update_task(task_id, state=const.TASK_STATE_PROCESSING, progress=5)
@@ -1070,6 +1074,13 @@ def _run_pipeline(
             "failed to generate final video",
         )
 
+    # O piloto automático valida o render (áudio, duração, legenda) antes de
+    # qualquer publicação; reprovado, a tarefa falha e nada é enviado.
+    if pre_publish_check is not None:
+        rejection = pre_publish_check(final_video_paths, subtitle_path)
+        if rejection:
+            return _mark_task_failed(task_id, QUALITY_GATE_STAGE, rejection)
+
     logger.success(
         f"task {task_id} finished, generated {len(final_video_paths)} videos."
     )
@@ -1163,6 +1174,7 @@ def start(
     voice_preview: dict | None = None,
     loomloom_video_request: loomloom.LoomLoomConfirmedVideoRequest | None = None,
     allow_server_file_input: bool = False,
+    pre_publish_check=None,
 ):
     """
     执行任务流水线，并确保未预期异常也会转换成可查询的失败状态。
@@ -1178,6 +1190,7 @@ def start(
             voice_preview=voice_preview,
             loomloom_video_request=loomloom_video_request,
             allow_server_file_input=allow_server_file_input,
+            pre_publish_check=pre_publish_check,
         )
     except Exception as exc:
         logger.exception(

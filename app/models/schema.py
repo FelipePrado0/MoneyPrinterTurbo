@@ -662,3 +662,56 @@ class CreateScheduleRequest(BaseModel):
 
     occurrences: List[ScheduleOccurrenceInput] = Field(min_length=1)
     params: VideoParams
+
+
+class AutopilotSettings(BaseModel):
+    """Configuração do piloto automático, validada igual na WebUI e na API.
+
+    Guardada no ``schedule.db`` (não no config.toml): a WebUI regrava o
+    config.toml inteiro a cada rerun, o que desfaria uma alteração feita pela
+    API em outro processo.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    videos_per_day: int = Field(default=3, ge=1, le=6)
+    start_time: str = Field(default="09:00", pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    interval_minutes: int = Field(default=180, ge=10, le=720)
+    niche: str = Field(
+        default="curiosidades científicas e fatos virais verificados",
+        min_length=3,
+        max_length=300,
+    )
+    video_language: str = Field(default="pt-BR", min_length=2, max_length=10)
+    voice_name: str = Field(
+        default="pt-BR-FranciscaNeural-Female", min_length=3, max_length=100
+    )
+    voice_rate: float = Field(default=0.9, ge=0.5, le=2.0)
+    font_size: int = Field(default=75, ge=30, le=120)
+    max_attempts: int = Field(default=3, ge=1, le=5)
+    retry_delay_minutes: int = Field(default=10, ge=1, le=120)
+    daily_upload_quota: int = Field(default=6, ge=1, le=50)
+    fact_check_enabled: bool = True
+    metrics_enabled: bool = True
+
+
+class AutopilotSettingsUpdate(BaseModel):
+    """PUT parcial: só os campos enviados mudam."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: Optional[bool] = None
+    videos_per_day: Optional[int] = None
+    start_time: Optional[str] = None
+    interval_minutes: Optional[int] = None
+    niche: Optional[str] = None
+    video_language: Optional[str] = None
+    voice_name: Optional[str] = None
+    voice_rate: Optional[float] = None
+    font_size: Optional[int] = None
+    max_attempts: Optional[int] = None
+    retry_delay_minutes: Optional[int] = None
+    daily_upload_quota: Optional[int] = None
+    fact_check_enabled: Optional[bool] = None
+    metrics_enabled: Optional[bool] = None
