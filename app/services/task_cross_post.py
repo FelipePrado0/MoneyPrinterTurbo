@@ -24,7 +24,7 @@ from loguru import logger
 from app.config import config
 from app.models import const
 from app.models.schema import VideoParams
-from app.services import llm, upload_post, webhook_notifier, youtube_upload
+from app.services import llm, upload_post, video_history, webhook_notifier, youtube_upload
 from app.services import state as sm
 
 # 发布请求最长可等待数分钟，不能继续占用视频生成任务的并发名额。
@@ -417,6 +417,16 @@ def _run_cross_post(
                     "YouTube returned an invalid response",
                 )
                 results.append(youtube_result)
+                if youtube_result.get("success"):
+                    try:
+                        video_history.mark_published(
+                            task_id,
+                            str(youtube_result.get("video_id") or ""),
+                            str(youtube_result.get("url") or ""),
+                            subject=video_subject,
+                        )
+                    except Exception as exc:
+                        logger.warning(f"failed to record published video: {exc}")
                 # publishAt agenda em private; o vídeo só fica público quando o
                 # YouTube processar o agendamento, então não é "publicado" ainda.
                 if youtube_result.get("success") and not publish_at:

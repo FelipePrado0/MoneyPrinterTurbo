@@ -27,7 +27,7 @@ from app.services import (
     voice,
 )
 from app.services import upload_post  # noqa: F401 (kept for `task.upload_post` back-compat access, e.g. in tests)
-from app.services import youtube_upload
+from app.services import video_history, youtube_upload
 from app.services import state as sm
 from app.utils import file_security, utils
 
@@ -1112,6 +1112,17 @@ def _run_pipeline(
     sm.state.update_task(
         task_id, state=const.TASK_STATE_COMPLETE, progress=100, **kwargs
     )
+    try:
+        # Antes de agendar a publicação: assim o "published" gravado pelo
+        # cross-post nunca é sobrescrito por este "generated".
+        video_history.record(
+            task_id,
+            params.video_subject,
+            "manual",
+            status=video_history.STATUS_GENERATED,
+        )
+    except Exception as exc:
+        logger.warning(f"failed to record video history, task_id: {task_id}: {exc}")
 
     if youtube_review_requested:
         schedule_youtube_review(

@@ -91,6 +91,7 @@ def create_schedule(
     occurrences: list[dict],
     params: dict,
     db_path: str | None = None,
+    group_id: str | None = None,
 ) -> str:
     """Persist a batch of occurrences sharing one recurrence rule.
 
@@ -101,12 +102,13 @@ def create_schedule(
     ``params`` is the base ``VideoParams`` payload used for generation
     (YouTube publish overrides included, same as any other generation);
     its ``video_subject`` is overridden per row from the occurrence.
-    Returns the new ``group_id``.
+    Returns the ``group_id`` (a fresh one unless the caller passes its own,
+    e.g. the autopilot's one-group-per-day id).
     """
     if not occurrences:
         raise ValueError("occurrences must not be empty")
 
-    group_id = uuid4().hex
+    group_id = group_id or uuid4().hex
     created_at = time.time()
 
     with closing(_connect(db_path)) as conn:

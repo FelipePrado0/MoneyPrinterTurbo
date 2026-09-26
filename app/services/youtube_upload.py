@@ -559,7 +559,23 @@ def publish_video(
     privacy_status: str | None = None,
     publish_at: Any = None,
 ) -> dict:
-    return youtube_upload_service.upload_video(
+    # Single choke point for every upload (autopilot, WebUI, API, review
+    # drafts), so the daily cap holds no matter who asked for the upload.
+    from app.services import video_history
+
+    try:
+        quota = video_history.daily_upload_quota()
+        used = video_history.uploads_since(video_history.quota_day_start())
+    except Exception as exc:
+        logger.warning(f"could not read the YouTube upload counter: {exc}")
+        quota, used = None, 0
+    if quota is not None and used >= quota:
+        return {
+            "success": False,
+            "platform": PLATFORM,
+            "error": f"daily YouTube upload quota reached ({used}/{quota})",
+        }
+    result = youtube_upload_service.upload_video(
         video_path=video_path,
         title=title,
         description=description,
@@ -567,6 +583,12 @@ def publish_video(
         privacy_status=privacy_status,
         publish_at=publish_at,
     )
+    if isinstance(result, dict) and result.get("success"):
+        try:
+            video_history.record_upload(str(result.get("video_id") or ""))
+        except Exception as exc:
+            logger.warning(f"could not record the YouTube upload: {exc}")
+    return result
 
 
 def update_video_metadata(

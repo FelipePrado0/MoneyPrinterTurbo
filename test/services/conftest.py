@@ -13,6 +13,9 @@ _LOGIN_GATE_TEST_MODULE = "test_webui_login_gate"
 
 @pytest.fixture(autouse=True)
 def _webui_apptest_starts_authenticated(request, tmp_path, monkeypatch):
+    # Pipeline/publish hooks write the video history into schedule.db; point
+    # every test at a throwaway file so none of them touches storage/.
+    monkeypatch.setenv("MPT_SCHEDULE_DB_PATH", str(tmp_path / "schedule.db"))
     if request.module.__name__.rsplit(".", 1)[-1] == _LOGIN_GATE_TEST_MODULE:
         # Esse módulo isola o próprio db (via utils.storage_dir) e precisa do
         # estado não-autenticado por padrão para testar o gate em si.
