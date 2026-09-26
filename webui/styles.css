@@ -211,7 +211,7 @@ div[class*="st-key-voice_mode_control"] [role="radiogroup"] > button p {
 /* 顶部任务入口由 st.fragment 定时刷新，Streamlit 会为 Fragment 自动生成一个
    占满整行的 LayoutWrapper。这里只收缩该包装层，保证右侧操作区按内容紧凑排列。 */
 .st-key-top_bar_actions
-    > div[data-testid="stLayoutWrapper"]:first-child {
+    > div[data-testid="stLayoutWrapper"] {
     flex: 0 0 auto !important;
     width: fit-content !important;
 }

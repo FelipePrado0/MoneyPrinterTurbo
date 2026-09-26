@@ -70,6 +70,7 @@ from app.services import task as tm
 from app.services import version_checker
 from app.utils.logging_utils import configure_terminal_logger
 from app.utils import utils
+from webui import autopilot_panel
 
 # 登录邮箱只存在 config.toml（本地文件，不进版本库），源码里不写死任何账号
 # 信息。首次启动创建唯一账号，密码只在这一次日志里出现一次；账号已存在时
@@ -1844,6 +1845,19 @@ def _open_settings_dialog(target_tab=None):
         st.session_state["settings_dialog_target_tab"] = target_tab
 
 
+def _open_autopilot_dialog():
+    st.session_state["autopilot_dialog_open"] = True
+
+
+def _dismiss_autopilot_dialog():
+    st.session_state["autopilot_dialog_open"] = False
+
+
+@st.dialog(tr("Autopilot"), width="large", on_dismiss=_dismiss_autopilot_dialog)
+def _render_autopilot_dialog():
+    autopilot_panel.render_dashboard(tr)
+
+
 def _open_material_settings_dialog():
     """供视频来源组件回调使用：直接打开素材服务设置。"""
     _open_settings_dialog("material")
@@ -1898,8 +1912,10 @@ def _render_top_bar():
     # 顶部栏分为品牌区和操作区两个独立区域。窄屏下由 Streamlit
     # 将两个区域整体换行，操作区内部再根据剩余宽度自动换行。
     with st.container(key="top_bar"):
+        # A marca ocupa ~480px; as quatro ações principais cabem em uma linha
+        # a partir de ~1280px, com idioma/sair na segunda.
         brand_col, actions_col = st.columns(
-            [3.5, 2.0],
+            [2.0, 2.5],
             vertical_alignment="center",
             gap="small",
         )
@@ -1922,6 +1938,15 @@ def _render_top_bar():
         ):
             _render_task_manager_entry()
             _render_schedule_manager_entry()
+
+            st.button(
+                tr("Autopilot"),
+                key="open_autopilot_dialog_button",
+                type="secondary",
+                icon=":material/autoplay:",
+                width="content",
+                on_click=_open_autopilot_dialog,
+            )
 
             st.button(
                 tr("Settings"),
@@ -3300,6 +3325,7 @@ def _render_settings_dialog():
         _set_runtime_config("app", "hide_config", False)
         settings_tab_labels = [
             tr("LLM Settings Tab"),
+            tr("Autopilot Settings Tab"),
             tr("Material API Tab"),
             tr("Auto-Publish Settings"),
             tr("Interface Settings Tab"),
@@ -3309,6 +3335,7 @@ def _render_settings_dialog():
         settings_tab_targets = {
             "llm": tr("LLM Settings Tab"),
             "material": tr("Material API Tab"),
+            "autopilot": tr("Autopilot Settings Tab"),
         }
         settings_tabs_key = localized_widget_key("settings_dialog_tabs")
         target_tab = st.session_state.pop("settings_dialog_target_tab", None)
@@ -3319,6 +3346,7 @@ def _render_settings_dialog():
 
         (
             middle_config_panel,
+            autopilot_config_panel,
             right_config_panel,
             publish_config_panel,
             left_config_panel,
@@ -3329,6 +3357,9 @@ def _render_settings_dialog():
             key=settings_tabs_key,
             on_change="rerun",
         )
+
+        with autopilot_config_panel:
+            autopilot_panel.render_settings_form(tr)
 
         with publish_config_panel:
             st.subheader(tr("YouTube Direct Upload"))
@@ -3836,6 +3867,12 @@ def _render_settings_dialog():
                     llm_form_panel.error(
                         tr("LLM Connection Test Failed").format(error=connection_error)
                     )
+
+            if llm_provider == "openrouter":
+                # Largura total da aba: os IDs de modelo não cabem na coluna.
+                autopilot_panel.render_llm_fallback(
+                    tr, middle_config_panel, _set_runtime_config, config.app
+                )
 
         # 右侧面板 - API 密钥设置
         with right_config_panel:
@@ -8644,6 +8681,8 @@ def _render_application():
 
     if st.session_state.get("settings_dialog_open", False):
         _render_settings_dialog()
+    elif st.session_state.get("autopilot_dialog_open", False):
+        _render_autopilot_dialog()
 
     review_task_id = st.session_state.get("youtube_review_task_id")
     if review_task_id:
