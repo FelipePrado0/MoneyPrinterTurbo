@@ -8,6 +8,8 @@ WORKDIR /MoneyPrinterTurbo
 RUN chmod 777 /MoneyPrinterTurbo
 
 ENV PYTHONPATH="/MoneyPrinterTurbo"
+# Whisper models live in the mounted storage so a rebuild does not re-download them.
+ENV HF_HOME="/MoneyPrinterTurbo/storage/hf_cache"
 
 # 本地用户默认继续优先使用国内镜像；GitHub Actions 发布 GHCR 镜像时使用 default，
 # 避免海外 runner 访问国内镜像过慢导致镜像发布长时间卡住。

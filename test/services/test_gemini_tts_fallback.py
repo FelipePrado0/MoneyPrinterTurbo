@@ -175,6 +175,67 @@ class LastResortVoiceTest(unittest.TestCase):
         self.assertEqual(video_history.list_videos()[0][0]["tts_voice"], "gemini:Puck")
 
 
+class GeminiSubtitleAlignmentTest(unittest.TestCase):
+    script = "O polvo tem três corações. E sangue azul."
+
+    def _sub_maker(self):
+        sub_maker = vs.populate_legacy_submaker_with_full_text(
+            vs.ensure_legacy_submaker_fields(vs.SubMaker()), self.script, 4.0
+        )
+        sub_maker.needs_alignment = True
+        return sub_maker
+
+    def _generate(self, whisper_create):
+        tmp = tempfile.mkdtemp(prefix="gemini-align-")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        with patch.object(
+            task_service.config, "app", dict(task_service.config.app, subtitle_provider="edge")
+        ), patch("app.services.subtitle.create", side_effect=whisper_create) as create, patch(
+            "app.utils.utils.task_dir", lambda tid="": tmp
+        ):
+            path = task_service.generate_subtitle(
+                "task-align", _Params(), self.script, self._sub_maker(), "audio.mp3"
+            )
+        return path, create
+
+    def test_gemini_audio_is_aligned_with_whisper_and_keeps_script_text(self):
+        def whisper(audio_file, subtitle_file, word_level=False):
+            Path(subtitle_file).write_text(
+                "1\n00:00:00,300 --> 00:00:01,900\nO polvo tem 3 corações\n\n"
+                "2\n00:00:02,400 --> 00:00:03,600\nE sangue azul\n\n",
+                encoding="utf-8",
+            )
+
+        path, create = self._generate(whisper)
+
+        create.assert_called_once()
+        content = Path(path).read_text(encoding="utf-8")
+        self.assertIn("00:00:00,300 --> 00:00:01,900", content)
+        self.assertIn("O polvo tem três corações", content)
+
+    def test_falls_back_to_estimated_timing_when_whisper_fails(self):
+        path, _ = self._generate(lambda audio_file, subtitle_file, word_level=False: None)
+
+        content = Path(path).read_text(encoding="utf-8")
+        self.assertIn("O polvo tem três corações", content)
+        self.assertNotIn("00:00:00,000 --> 00:00:00,000", content)
+
+    def test_falls_back_when_alignment_leaves_lines_without_timing(self):
+        def whisper(audio_file, subtitle_file, word_level=False):
+            Path(subtitle_file).write_text(
+                "1\n00:00:00,300 --> 00:00:03,600\nO polvo tem três corações e sangue azul\n\n",
+                encoding="utf-8",
+            )
+
+        path, _ = self._generate(whisper)
+
+        self.assertNotIn("00:00:00,000 --> 00:00:00,000", Path(path).read_text(encoding="utf-8"))
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
 class TtsFallbackWarningTest(unittest.TestCase):
     def test_no_warning_when_requested_gemini_voice_spoke(self):
         self.assertIsNone(task_service.tts_fallback_warning("gemini:Kore-Firm", "gemini:Kore"))

@@ -491,6 +491,30 @@ def generate_audio(
         return custom_audio_file, audio_duration, None
 
 
+_UNTIMED_SUBTITLE = "00:00:00,000 --> 00:00:00,000"
+
+
+def _align_subtitle_with_whisper(audio_file, subtitle_path, video_script, word_level) -> bool:
+    try:
+        subtitle.create(
+            audio_file=audio_file, subtitle_file=subtitle_path, word_level=word_level
+        )
+        if not os.path.exists(subtitle_path):
+            return False
+        if not word_level:
+            subtitle.correct(subtitle_file=subtitle_path, video_script=video_script)
+        lines = subtitle.file_to_subtitles(subtitle_path)
+    except Exception as exc:
+        logger.warning(f"whisper alignment crashed: {exc}")
+        lines = []
+    if lines and all(line[1] != _UNTIMED_SUBTITLE for line in lines):
+        return True
+    # A line Whisper could not place gets zero timing; better the estimate.
+    if os.path.exists(subtitle_path):
+        os.remove(subtitle_path)
+    return False
+
+
 def generate_subtitle(task_id, params, video_script, sub_maker, audio_file):
     """
     Generate subtitle for the video script.
@@ -522,6 +546,13 @@ def generate_subtitle(task_id, params, video_script, sub_maker, audio_file):
         return ""
 
     is_word_level = getattr(params, "subtitle_display_mode", "sentence") == "word_by_word"
+
+    # Gemini TTS has no word timestamps, only an estimate per sentence; Whisper
+    # listens to the real audio for the timing while the text stays the script.
+    if subtitle_provider == "edge" and getattr(sub_maker, "needs_alignment", False):
+        if _align_subtitle_with_whisper(audio_file, subtitle_path, video_script, is_word_level):
+            return subtitle_path
+        logger.warning("whisper alignment failed, keeping the estimated subtitle timing")
 
     if subtitle_provider == "edge":
         voice.create_subtitle(

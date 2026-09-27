@@ -551,7 +551,7 @@ upload_post_max_pending_tasks = 10
 [whisper]
 # The model is downloaded automatically on first use unless a matching local
 # directory exists at ./models/whisper-{model_size}.
-model_size = "large-v3"
+model_size = "small"
 # device: "cpu" or "cuda". Common compute types include "int8" for CPU and
 # "float16" or "int8_float16" for CUDA.
 device = "cpu"
