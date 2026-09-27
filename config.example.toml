@@ -276,6 +276,11 @@ anthropic_model_name = ""
 # API key: https://aistudio.google.com/app/apikey
 gemini_api_key = ""
 gemini_model_name = ""
+gemini_api_keys = []
+gemini_tts_model = "gemini-3.1-flash-tts-preview"
+gemini_tts_style = "Narre em português do Brasil como um narrador de documentário de ciência: voz confiante, clara e envolvente, ritmo natural levemente ágil, ênfase sutil nos números e fatos surpreendentes. Sem exagero, sem gritar, sem soar eufórico:"
+gemini_tts_fallback_voices = ["Puck", "Zephyr"]
+gemini_tts_last_resort_voice = "pt-BR-FranciscaNeural-Female"
 
 # DeepSeek
 # API key: https://platform.deepseek.com/api_keys

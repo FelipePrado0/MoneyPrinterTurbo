@@ -367,6 +367,26 @@ def _resolve_reusable_voice_preview(
     return preview_file, math.ceil(duration), sub_maker
 
 
+def _record_tts_voice(task_id, sub_maker, requested_voice) -> None:
+    try:
+        video_history.set_tts_voice(
+            task_id, getattr(sub_maker, "tts_voice", None) or requested_voice
+        )
+    except Exception as exc:
+        logger.warning(f"failed to record the narration voice: {exc}")
+
+
+def tts_fallback_warning(requested_voice: str, used_voice: str) -> dict | None:
+    """Warning for the WebUI when a Gemini voice was replaced by its fallback."""
+    if not used_voice or not voice.is_gemini_voice(requested_voice):
+        return None
+    if voice.is_gemini_voice(used_voice) and voice.parse_gemini_voice_name(
+        used_voice
+    ) == voice.parse_gemini_voice_name(requested_voice):
+        return None
+    return {"code": "tts_voice_fallback", "requested": requested_voice, "used": used_voice}
+
+
 def generate_audio(
     task_id,
     params,
@@ -411,6 +431,7 @@ def generate_audio(
             voice_preview,
         )
         if reusable_preview:
+            _record_tts_voice(task_id, reusable_preview[2], params.voice_name)
             return reusable_preview
 
         logger.info("no custom audio file provided, using TTS to generate audio.")
@@ -421,6 +442,19 @@ def generate_audio(
             voice_rate=params.voice_rate,
             voice_file=audio_file,
         )
+        last_resort = config.app.get("gemini_tts_last_resort_voice", "")
+        if sub_maker is None and last_resort and voice.is_gemini_voice(params.voice_name):
+            logger.warning(
+                f"every Gemini voice and key failed, using last-resort voice: {last_resort}"
+            )
+            sub_maker = voice.tts(
+                text=video_script,
+                voice_name=voice.parse_voice_name(last_resort),
+                voice_rate=params.voice_rate,
+                voice_file=audio_file,
+            )
+            if sub_maker is not None:
+                sub_maker.tts_voice = last_resort
         if sub_maker is None:
             _mark_task_failed(
                 task_id,
@@ -442,6 +476,7 @@ def generate_audio(
         if audio_duration == 0:
             _mark_task_failed(task_id, "audio", "generated audio duration is zero")
             return None, None, None
+        _record_tts_voice(task_id, sub_maker, params.voice_name)
         return audio_file, audio_duration, sub_maker
     else:
         logger.info(f"using custom audio file: {custom_audio_file}")
@@ -1120,6 +1155,11 @@ def _run_pipeline(
     if type(params.video_concat_mode) is str:
         params.video_concat_mode = VideoConcatMode(params.video_concat_mode)
 
+    tts_warning = tts_fallback_warning(
+        params.voice_name, getattr(sub_maker, "tts_voice", "")
+    )
+    tts_warnings = [tts_warning] if tts_warning else []
+
     # 6. Generate final videos
     final_video_paths, combined_video_paths, generation_warnings = (
         generate_final_videos(
@@ -1179,7 +1219,7 @@ def _run_pipeline(
         "cross_post_results": None,
         "cross_post_error": None,
         "cross_post_owner": _cross_post_process_owner if should_cross_post else None,
-        "warnings": generation_warnings or None,
+        "warnings": [*tts_warnings, *(generation_warnings or [])] or None,
         "youtube_review_state": (
             const.YOUTUBE_REVIEW_STATE_PENDING if youtube_review_requested else None
         ),

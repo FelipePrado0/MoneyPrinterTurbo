@@ -685,7 +685,7 @@ class AutopilotSettings(BaseModel):
     )
     video_language: str = Field(default="pt-BR", min_length=2, max_length=10)
     voice_name: str = Field(
-        default="pt-BR-FranciscaNeural-Female", min_length=3, max_length=100
+        default="gemini:Kore-Firm", min_length=3, max_length=100
     )
     voice_rate: float = Field(default=0.9, ge=0.5, le=2.0)
     font_size: int = Field(default=75, ge=30, le=120)

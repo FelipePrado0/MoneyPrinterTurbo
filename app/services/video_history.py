@@ -56,9 +56,15 @@ _COLUMNS = (
     "public_at",
     "views_24h",
     "views_7d",
+    "tts_voice",
 )
 # Added after the first release; ``_connect`` adds them to older databases.
-_ADDED_COLUMNS = (("public_at", "REAL"), ("views_24h", "INTEGER"), ("views_7d", "INTEGER"))
+_ADDED_COLUMNS = (
+    ("public_at", "REAL"),
+    ("views_24h", "INTEGER"),
+    ("views_7d", "INTEGER"),
+    ("tts_voice", "TEXT"),
+)
 _DAY = 86400.0
 # Views at a fixed age, so a new video is compared fairly with an old one.
 SNAPSHOT_WINDOWS = (("views_24h", _DAY), ("views_7d", 7 * _DAY))
@@ -200,6 +206,16 @@ def set_status(
         conn.execute(
             "UPDATE videos SET status = ?, error = ?, updated_at = ? WHERE task_id = ?",
             (status, error, time.time(), task_id),
+        )
+        conn.commit()
+
+
+def set_tts_voice(task_id: str, tts_voice: str, db_path: str | None = None) -> None:
+    """Voice that narrated the task; no-op for tasks outside the history."""
+    with closing(_connect(db_path)) as conn:
+        conn.execute(
+            "UPDATE videos SET tts_voice = ?, updated_at = ? WHERE task_id = ?",
+            (tts_voice, time.time(), task_id),
         )
         conn.commit()
 

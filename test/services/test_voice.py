@@ -518,7 +518,7 @@ class TestVoiceService(unittest.TestCase):
         with patch("google.genai.Client", _FakeClient), patch.object(
             vs.config,
             "app",
-            dict(vs.config.app, gemini_api_key="test-key"),
+            dict(vs.config.app, gemini_api_key="test-key", gemini_api_keys=[], gemini_tts_style="", gemini_tts_model=""),
         ):
             sub_maker = vs.gemini_tts(
                 text=text,
@@ -536,8 +536,8 @@ class TestVoiceService(unittest.TestCase):
         self.assertEqual(len(getattr(sub_maker, "offset", [])), 2)
         self.assertEqual(sub_maker.offset[0][0], 0)
         self.assertLess(sub_maker.offset[0][1], sub_maker.offset[1][1])
-        self.assertEqual(captured["client_kwargs"], {"api_key": "test-key"})
-        self.assertEqual(captured["model"], "gemini-2.5-flash-preview-tts")
+        self.assertEqual(captured["client_kwargs"]["api_key"], "test-key")
+        self.assertEqual(captured["model"], "gemini-3.1-flash-tts-preview")
         self.assertEqual(captured["contents"], text)
         self.assertEqual(captured["config"].response_modalities, ["AUDIO"])
         voice_config = captured["config"].speech_config.voice_config
