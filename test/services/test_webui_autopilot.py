@@ -1,3 +1,4 @@
+import re
 from datetime import datetime
 
 from streamlit.testing.v1 import AppTest
@@ -9,6 +10,10 @@ def _dashboard_app():
     from webui import autopilot_panel
 
     autopilot_panel.render_dashboard(lambda key: key)
+
+
+def _voice_box(at):
+    return next(w for w in at.selectbox if str(w.key).startswith("autopilot_voice_select_"))
 
 
 def _settings_app():
@@ -70,6 +75,8 @@ def test_dashboard_shows_audience_corrections_as_plain_data():
 
 
 def test_settings_form_saves_valid_values():
+    # Edge voice: the form alone, without the Gemini options above it.
+    autopilot.save_settings({"voice_name": "pt-BR-FranciscaNeural-Female"})
     at = AppTest.from_function(_settings_app, default_timeout=30).run()
     assert not at.exception
     at.toggle[0].set_value(True)
@@ -84,9 +91,70 @@ def test_settings_form_saves_valid_values():
 
 
 def test_settings_form_reports_invalid_values_without_saving():
+    # Edge voice: the form alone, without the Gemini options above it.
+    autopilot.save_settings({"voice_name": "pt-BR-FranciscaNeural-Female"})
     at = AppTest.from_function(_settings_app, default_timeout=30).run()
     at.text_input[0].set_value("")
     at.button[0].click().run()
     assert not at.exception
     assert at.error and at.error[0].value.startswith("Autopilot Save Failed")
     assert autopilot.load_settings().video_language == "pt-BR"
+
+
+def test_settings_form_picks_voice_from_list_and_keeps_unknown_saved_voice():
+    autopilot.save_settings({"voice_name": "custom:minha-voz"})
+    at = AppTest.from_function(_settings_app, default_timeout=30).run()
+    assert not at.exception
+    voice_box = _voice_box(at)
+    assert voice_box.value == "custom:minha-voz"
+    assert {"gemini:Kore-Firm", "pt-BR-FranciscaNeural-Female"} <= set(voice_box.options)
+
+    voice_box.set_value("gemini:Kore-Firm").run()
+    assert not at.exception
+    assert autopilot.load_settings().voice_name == "gemini:Kore-Firm"
+
+
+def _gemini_keys(at):
+    """Gemini widget keys without the value hash (and key-row index) suffix."""
+    widgets = [*at.text_input, *at.text_area, *at.multiselect, *at.selectbox]
+    return {
+        re.sub(r"_[0-9a-f]{8}(_\d+)?$", "", str(w.key))
+        for w in widgets
+        if str(w.key).startswith("autopilot_gemini_")
+    }
+
+
+def test_gemini_voice_shows_gemini_options_and_locks_speed():
+    from app.config import config
+
+    autopilot.save_settings({"voice_name": "pt-BR-FranciscaNeural-Female"})
+    at = AppTest.from_function(_settings_app, default_timeout=30).run()
+    assert _gemini_keys(at) == set()
+    assert not at.slider[0].disabled
+
+    _voice_box(at).set_value("gemini:Kore-Firm").run()
+    assert not at.exception
+    assert _gemini_keys(at) == {
+        "autopilot_gemini_key",
+        "autopilot_gemini_tts_style_input",
+        "autopilot_gemini_tts_model_input",
+        "autopilot_gemini_tts_fallback_voices_input",
+        "autopilot_gemini_tts_last_resort_voice_input",
+    }
+    assert at.slider[0].disabled
+
+    original = config.app.get("gemini_tts_style")
+    try:
+        style = next(w for w in at.text_area if str(w.key).startswith("autopilot_gemini_tts_style_input_"))
+        style.set_value("Fale calmo:").run()
+        assert config.app["gemini_tts_style"] == "Fale calmo:"
+    finally:
+        config.app["gemini_tts_style"] = original
+
+
+def test_history_shows_narration_voice():
+    video_history.record("t-voice", "Polvo", "autopilot")
+    video_history.set_tts_voice("t-voice", "gemini:Puck")
+    at = AppTest.from_function(_dashboard_app, default_timeout=30).run()
+    assert not at.exception
+    assert at.dataframe[-1].value.iloc[0]["voice"] == "gemini:Puck"

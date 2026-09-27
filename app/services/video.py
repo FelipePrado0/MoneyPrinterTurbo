@@ -38,6 +38,7 @@ from app.models.schema import (
     VideoParams,
     VideoTransitionMode,
 )
+from app.services import audio_mastering
 from app.services import bgm as bgm_service
 from app.services.utils import video_effects
 from app.utils import file_security, utils
@@ -1480,6 +1481,17 @@ def generate_video(
                 )
             )
         bgm_mix_succeeded = True
+        # Mastered track = treated voice + ducked music at -14 LUFS. It replaces
+        # voice_volume/bgm mixing below; on failure that plain mix still runs.
+        master_file = f"{output_file}.master.wav"
+        clip_stack.callback(
+            lambda: os.path.exists(master_file) and os.remove(master_file)
+        )
+        if audio_mastering.master(
+            audio_path, bgm_file or None, params.bgm_volume, video_clip.duration, master_file
+        ):
+            audio_clip = clip_stack.enter_context(AudioFileClip(master_file))
+            bgm_file = ""
         if bgm_file:
             try:
                 bgm_effects = [

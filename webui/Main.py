@@ -65,12 +65,14 @@ from app.services import schedule_rules
 from app.services import schedule_store
 from app.services import trend_topic
 from app.services import sonilo as sonilo_service
+from app.services import voice_gemini
 from app.services import state as sm
 from app.services import task as tm
 from app.services import version_checker
 from app.utils.logging_utils import configure_terminal_logger
 from app.utils import utils
 from webui import autopilot_panel
+from webui import gemini_tts_settings
 
 # 登录邮箱只存在 config.toml（本地文件，不进版本库），源码里不写死任何账号
 # 信息。首次启动创建唯一账号，密码只在这一次日志里出现一次；账号已存在时
@@ -325,7 +327,6 @@ NON_LLM_COMPANION_KEYS = {
 # MiMo 的 LLM 密钥。恢复备份时必须清除每一个别名，否则遗留的旧值
 # 会在下一次 rerun 覆盖刚刚恢复的密钥。
 CREDENTIAL_WIDGET_STATE_ALIASES = {
-    ("app", "gemini_api_key"): ("gemini_tts_api_key_input",),
     ("app", "mimo_api_key"): ("mimo_tts_api_key_input",),
 }
 # ui 分区只保存界面偏好，不含任何凭据，备份时整体跳过。
@@ -2248,6 +2249,12 @@ def _render_generation_task_snapshot(task_id, task):
             st.warning(
                 tr("Sonilo BGM Fallback Warning").format(
                     index=warning.get("video_index", "")
+                )
+            )
+        elif isinstance(warning, Mapping) and warning.get("code") == "tts_voice_fallback":
+            st.warning(
+                tr("TTS Voice Fallback Warning").format(
+                    requested=warning.get("requested", ""), used=warning.get("used", "")
                 )
             )
         elif (
@@ -5981,7 +5988,10 @@ def _get_voice_preview_provider_signature(tts_server: str) -> dict:
         }
     if tts_server == "gemini-tts":
         return {
-            "credential": _credential_signature(config.app.get("gemini_api_key", ""))
+            "credential": _credential_signature(",".join(voice_gemini.api_keys())),
+            "model": config.app.get("gemini_tts_model", ""),
+            "style": config.app.get("gemini_tts_style", ""),
+            "fallback_voices": list(config.app.get("gemini_tts_fallback_voices") or []),
         }
     if tts_server == "mimo-tts":
         return {"credential": _credential_signature(config.app.get("mimo_api_key", ""))}
@@ -7121,15 +7131,7 @@ def _render_audio_settings(panel, params):
                 _set_runtime_config("azure", "speech_key", azure_speech_key)
 
             if tts_mode_enabled and selected_tts_server == "gemini-tts":
-                # Gemini TTS 与 Gemini LLM 共用同一份密钥；在音频面板提供直接入口，
-                # 用户无需先切换 LLM Provider 才能完成语音配置。
-                gemini_tts_api_key = st.text_input(
-                    tr("Gemini API Key"),
-                    value=config.app.get("gemini_api_key", ""),
-                    type="password",
-                    key="gemini_tts_api_key_input",
-                )
-                _set_runtime_config("app", "gemini_api_key", gemini_tts_api_key)
+                gemini_tts_settings.render(tr)
 
             # 当选择硅基流动时，显示API key输入框和说明信息
             if tts_mode_enabled and (
@@ -7402,6 +7404,10 @@ def _render_audio_settings(panel, params):
                         selected_tts_server == "voxcpm"
                         or (voice_name and voice.is_voxcpm_voice(voice_name))
                     )
+                    is_gemini = bool(
+                        selected_tts_server == "gemini-tts"
+                        or (voice_name and voice.is_gemini_voice(voice_name))
+                    )
                     params.voice_rate = stable_selectbox(
                         tr("Voiceover Speed"),
                         options=voice_rate_options,
@@ -7413,9 +7419,11 @@ def _render_audio_settings(panel, params):
                         help=(
                             tr("VoxCPM Speed Not Supported")
                             if is_voxcpm
+                            else tr("Gemini Speed Not Supported")
+                            if is_gemini
                             else tr("Voiceover Speed Help")
                         ),
-                        disabled=is_voxcpm,
+                        disabled=is_voxcpm or is_gemini,
                     )
                 _set_runtime_config("ui", "voice_volume", params.voice_volume)
                 _set_runtime_config("ui", "voice_rate", params.voice_rate)

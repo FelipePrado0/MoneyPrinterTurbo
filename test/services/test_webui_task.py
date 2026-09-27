@@ -216,10 +216,10 @@ def test_completed_task_renders_subject_named_video_download(
         "os": os,
         "re": re,
         "st": fake_st,
-        "tr": lambda key: (
-            "Video {index} reused {count} source clips."
-            if key == "Batch Material Reuse Warning" else key
-        ),
+        "tr": lambda key: {
+            "Batch Material Reuse Warning": "Video {index} reused {count} source clips.",
+            "TTS Voice Fallback Warning": "{requested} failed; narrated with {used}.",
+        }.get(key, key),
         "_render_generation_logs": lambda _task_id: None,
     }
     module = ast.fix_missing_locations(ast.Module(body=selected_nodes, type_ignores=[]))
@@ -232,6 +232,7 @@ def test_completed_task_renders_subject_named_video_download(
             "progress": 100,
             "videos": [str(video_path)],
             "warnings": [
+                {"code": "tts_voice_fallback", "requested": "gemini:Kore-Firm", "used": "gemini:Puck"},
                 {"code": "batch_materials_reused", "video_index": 2, "count": 3}
             ],
             "video_subject": "A day: in / Shanghai?",
@@ -239,7 +240,10 @@ def test_completed_task_renders_subject_named_video_download(
     )
 
     assert fake_st.videos == [str(video_path)]
-    assert fake_st.warnings == ["Video 2 reused 3 source clips."]
+    assert fake_st.warnings == [
+        "gemini:Kore-Firm failed; narrated with gemini:Puck.",
+        "Video 2 reused 3 source clips.",
+    ]
     assert fake_st.downloads == [
         (
             "Download Video",

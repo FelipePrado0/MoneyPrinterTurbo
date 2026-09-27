@@ -397,7 +397,10 @@ def test_credential_widget_state_keys_cover_shared_input_aliases():
     """音频面板为同一份密钥提供了第二个输入框，别名必须一起返回。"""
     assert credential_widget_state_keys("app", "gemini_api_key") == (
         "gemini_api_key_input",
-        "gemini_tts_api_key_input",
+    )
+    # The Gemini key rows are keyed by the saved value, so a restore redraws them.
+    assert credential_widget_state_keys("app", "gemini_api_keys") == (
+        "gemini_api_keys_input",
     )
     assert credential_widget_state_keys("app", "mimo_api_key") == (
         "mimo_api_key_input",
@@ -414,7 +417,6 @@ def test_apply_key_backup_writes_config_and_clears_every_widget_alias():
     FAKE_STREAMLIT.session_state.update(
         {
             "gemini_api_key_input": "stale-gemini",
-            "gemini_tts_api_key_input": "stale-gemini",
             "loomloom_api_token_input": "stale-loomloom",
             "azure_speech_key_input": "stale-azure",
             "elevenlabs_voices_stale-key": ["old voice"],
@@ -426,15 +428,17 @@ def test_apply_key_backup_writes_config_and_clears_every_widget_alias():
         {
             "app": {
                 "gemini_api_key": "new-gemini",
+                "gemini_api_keys": ["tts-1", "tts-2"],
                 "loomloom_api_token": "new-loomloom",
             },
             "azure": {"speech_key": "new-azure", "speech_region": "westeurope"},
         }
     )
 
-    assert restored_count == 4
+    assert restored_count == 5
     assert sorted(RUNTIME_CONFIG_UPDATES) == [
         ("app", "gemini_api_key", "new-gemini"),
+        ("app", "gemini_api_keys", ["tts-1", "tts-2"]),
         ("app", "loomloom_api_token", "new-loomloom"),
         ("azure", "speech_key", "new-azure"),
         ("azure", "speech_region", "westeurope"),

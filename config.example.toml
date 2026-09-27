@@ -276,6 +276,11 @@ anthropic_model_name = ""
 # API key: https://aistudio.google.com/app/apikey
 gemini_api_key = ""
 gemini_model_name = ""
+gemini_api_keys = []
+gemini_tts_model = "gemini-3.1-flash-tts-preview"
+gemini_tts_style = "Narre em português do Brasil como um narrador de documentário de ciência: voz confiante, clara e envolvente, ritmo natural levemente ágil, ênfase sutil nos números e fatos surpreendentes. Sem exagero, sem gritar, sem soar eufórico:"
+gemini_tts_fallback_voices = ["Puck", "Zephyr"]
+gemini_tts_last_resort_voice = "pt-BR-FranciscaNeural-Female"
 
 # DeepSeek
 # API key: https://platform.deepseek.com/api_keys
@@ -546,7 +551,7 @@ upload_post_max_pending_tasks = 10
 [whisper]
 # The model is downloaded automatically on first use unless a matching local
 # directory exists at ./models/whisper-{model_size}.
-model_size = "large-v3"
+model_size = "small"
 # device: "cpu" or "cuda". Common compute types include "int8" for CPU and
 # "float16" or "int8_float16" for CUDA.
 device = "cpu"

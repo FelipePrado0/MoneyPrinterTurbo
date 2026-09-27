@@ -589,12 +589,13 @@ _ENV_SECRET_OVERRIDES = {
     "youtube_client_secret": "MPT_YOUTUBE_CLIENT_SECRET",
     "youtube_refresh_token": "MPT_YOUTUBE_REFRESH_TOKEN",
     "openrouter_api_key": "MPT_OPENROUTER_API_KEY",
+    "gemini_api_keys": "MPT_GEMINI_API_KEYS",
     "youtube_data_api_key": "MPT_YOUTUBE_DATA_API_KEY",
     "pexels_api_keys": "MPT_PEXELS_API_KEYS",
     "pixabay_api_keys": "MPT_PIXABAY_API_KEYS",
 }
 # Comma-separated in the env var, a list in config.toml.
-_ENV_LIST_KEYS = frozenset({"pexels_api_keys", "pixabay_api_keys"})
+_ENV_LIST_KEYS = frozenset({"pexels_api_keys", "pixabay_api_keys", "gemini_api_keys"})
 
 
 def _apply_env_overrides():
