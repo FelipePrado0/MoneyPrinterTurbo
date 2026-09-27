@@ -9,7 +9,8 @@ from datetime import datetime, time
 
 import streamlit as st
 
-from app.services import autopilot, llm_free_models, schedule_store, video_history
+from app.services import autopilot, llm_free_models, schedule_store, video_history, voice
+from webui import gemini_tts_settings
 
 HISTORY_LIMIT = 100
 
@@ -200,6 +201,7 @@ def _render_history(tr) -> None:
                 "retention": row["avg_view_percentage"],
                 "link": row["youtube_url"],
                 "model": row["llm_model"] or "",
+                "voice": row["tts_voice"] or "",
                 "error": row["error"] or "",
             }
             for row in rows
@@ -219,6 +221,7 @@ def _render_history(tr) -> None:
                 tr("Autopilot Col Link"), display_text=tr("Autopilot Open"), width="small"
             ),
             "model": st.column_config.TextColumn(tr("Autopilot Col Model"), width="medium"),
+            "voice": st.column_config.TextColumn(tr("Autopilot Col Voice"), width="small"),
             "error": st.column_config.TextColumn(tr("Autopilot Col Error"), width="medium"),
         },
     )
@@ -284,6 +287,47 @@ def render_dashboard(tr) -> None:
 # --- settings form ------------------------------------------------------------
 
 
+def _voice_options(current: str, language: str) -> list[str]:
+    """Gemini voices first, then Edge voices of the video language; the saved
+    voice stays selectable even when it is in neither list."""
+    options = [
+        *voice.get_gemini_voices(),
+        *voice.get_all_azure_voices(filter_locals=[language]),
+    ]
+    return options if current in options else [current, *options]
+
+
+def _render_voice_settings(tr, current) -> bool:
+    """Voice picker outside the form, so the Gemini options show up as soon as
+    a Gemini voice is picked; the voice and those options save on change."""
+    # The key carries the saved voice, so the widget always shows what is saved.
+    key = f"autopilot_voice_select_{current.voice_name}"
+
+    def save_voice():
+        # No st.toast here: output from a callback breaks the open dialog.
+        try:
+            autopilot.save_settings({"voice_name": st.session_state[key]})
+        except ValueError as exc:
+            st.session_state["autopilot_voice_error"] = str(exc)
+
+    voice_error = st.session_state.pop("autopilot_voice_error", None)
+    if voice_error:
+        st.error(tr("Autopilot Save Failed").format(error=voice_error))
+    options = _voice_options(current.voice_name, current.video_language)
+    st.selectbox(
+        tr("Autopilot Voice"),
+        options=options,
+        index=options.index(current.voice_name),
+        help=tr("Autopilot Voice Help"),
+        key=key,
+        on_change=save_voice,
+    )
+    is_gemini = voice.is_gemini_voice(current.voice_name)
+    if is_gemini:
+        gemini_tts_settings.render(tr, prefix="autopilot_")
+    return is_gemini
+
+
 def render_settings_form(tr) -> None:
     try:
         current = autopilot.load_settings()
@@ -292,6 +336,7 @@ def render_settings_form(tr) -> None:
         return
 
     st.caption(tr("Autopilot Settings Intro"))
+    is_gemini = _render_voice_settings(tr, current)
     with st.form("autopilot_settings_form", border=False):
         enabled = st.toggle(tr("Autopilot Enable"), value=current.enabled)
 
@@ -312,18 +357,13 @@ def render_settings_form(tr) -> None:
             help=tr("Autopilot Niche Help"),
         )
 
-        col_lang, col_voice = st.columns([1, 2])
+        col_lang, col_rate, col_font = st.columns(3)
         video_language = col_lang.text_input(
             tr("Autopilot Language"), value=current.video_language, max_chars=10
         )
-        voice_name = col_voice.text_input(
-            tr("Autopilot Voice"), value=current.voice_name, max_chars=100,
-            help=tr("Autopilot Voice Help"),
-        )
-
-        col_rate, col_font = st.columns(2)
         voice_rate = col_rate.slider(
-            tr("Autopilot Voice Rate"), min_value=0.5, max_value=2.0, value=float(current.voice_rate), step=0.05
+            tr("Autopilot Voice Rate"), min_value=0.5, max_value=2.0, value=float(current.voice_rate), step=0.05,
+            disabled=is_gemini, help=tr("Gemini Speed Not Supported") if is_gemini else None,
         )
         font_size = col_font.number_input(
             tr("Autopilot Font Size"), min_value=30, max_value=120, value=current.font_size, step=1
@@ -362,7 +402,6 @@ def render_settings_form(tr) -> None:
                     "interval_minutes": int(interval_minutes),
                     "niche": niche.strip(),
                     "video_language": video_language.strip(),
-                    "voice_name": voice_name.strip(),
                     "voice_rate": float(voice_rate),
                     "font_size": int(font_size),
                     "max_attempts": int(max_attempts),

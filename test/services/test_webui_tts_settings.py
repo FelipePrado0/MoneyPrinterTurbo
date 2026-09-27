@@ -30,7 +30,7 @@ TTS_API_KEY_LABELS = {
 TTS_PROVIDER_WIDGETS = {
     "azure-tts-v2": ("azure_speech_key_input", "Speech Key"),
     "siliconflow": ("siliconflow_api_key_input", "SiliconFlow API Key"),
-    "gemini-tts": ("gemini_tts_api_key_input", "Gemini API Key"),
+    "gemini-tts": ("gemini_key", "Gemini API Key Primary"),
     "mimo-tts": ("mimo_tts_api_key_input", "MiMo API Key"),
     "minimax-tts": ("minimax_tts_api_key_input", "MiniMax TTS API Key"),
     "elevenlabs": ("elevenlabs_api_key_input", "ElevenLabs API Key"),
@@ -371,4 +371,151 @@ def test_minimax_voices_load_only_on_demand_and_sync_the_selected_voice():
     assert get_catalog.call_count == 1
     assert not any(item.label == "MiniMax TTS Voice ID" for item in app.text_input)
     assert not any(item.label == "MiniMax Voice Catalog" for item in app.selectbox)
+    assert [str(item.value) for item in app.exception] == []
+
+
+def test_gemini_tts_keys_are_a_dynamic_list_in_the_audio_panel():
+    test_app = dict(config.app, gemini_api_keys=["key-a", "key-b"], gemini_api_key="llm-key")
+    test_ui = dict(config.ui, voice_mode="tts", tts_server="gemini-tts", voice_name="gemini:Kore-Firm")
+
+    with (
+        patch.object(config, "app", test_app),
+        patch.object(config, "ui", test_ui),
+        patch.object(config, "try_save_config", return_value=True),
+        patch.object(config, "save_config"),
+    ):
+        app = AppTest.from_file(str(WEBUI_MAIN), default_timeout=30)
+        app.session_state["ui_language"] = "en"
+        app.run()
+
+        def key_fields():
+            return [w for w in app.text_input if str(w.key).startswith("gemini_key_")]
+
+        assert [w.value for w in key_fields()] == ["key-a", "key-b"]
+        assert [w.label for w in key_fields()] == ["Key 1 (main)", "Key 2 (fallback)"]
+        assert all(w.proto.type == w.proto.PASSWORD for w in key_fields())
+
+        app.button(key="gemini_key_add").click().run()
+        key_fields()[-1].set_value("key-c").run()
+        assert config.app["gemini_api_keys"] == ["key-a", "key-b", "key-c"]
+
+        app.button(key="gemini_key_remove_1").click().run()
+        assert config.app["gemini_api_keys"] == ["key-a", "key-c"]
+        assert [w.value for w in key_fields()] == ["key-a", "key-c"]
+        assert config.app["gemini_api_key"] == "llm-key"
+
+    assert [str(item.value) for item in app.exception] == []
+
+
+_GEMINI_WIDGETS = (
+    "gemini_key_",
+    "gemini_tts_style_input",
+    "gemini_tts_model_input",
+    "gemini_tts_fallback_voices_input",
+    "gemini_tts_last_resort_voice_input",
+)
+
+
+def _widget_keys(app):
+    keys = set()
+    for group in (app.text_input, app.text_area, app.multiselect, app.selectbox):
+        keys.update(str(getattr(item, "key", "")) for item in group)
+    return keys
+
+
+def _run_tts_app(test_app, tts_server, voice_name):
+    test_ui = dict(config.ui, voice_mode="tts", tts_server=tts_server, voice_name=voice_name)
+    with (
+        patch.object(config, "app", test_app),
+        patch.object(config, "ui", test_ui),
+        patch.object(config, "try_save_config", return_value=True),
+        patch.object(config, "save_config"),
+    ):
+        app = AppTest.from_file(str(WEBUI_MAIN), default_timeout=30)
+        app.session_state["ui_language"] = "en"
+        app.run()
+    return app
+
+
+def test_gemini_settings_are_hidden_for_other_voices():
+    app = _run_tts_app(dict(config.app), "azure-tts-v1", "pt-BR-FranciscaNeural-Female")
+
+    keys = _widget_keys(app)
+    for widget_key in _GEMINI_WIDGETS:
+        assert not any(key.startswith(widget_key) for key in keys), widget_key
+    assert not _widget_by_key(app.selectbox, "voice_rate_select").disabled
+    assert [str(item.value) for item in app.exception] == []
+
+
+def test_gemini_settings_edit_instruction_model_and_fallbacks():
+    test_app = dict(
+        config.app,
+        gemini_api_keys=["key-a"],
+        gemini_tts_style="Narre como documentário:",
+        gemini_tts_model="gemini-3.1-flash-tts-preview",
+        gemini_tts_fallback_voices=["Puck", "Zephyr"],
+        gemini_tts_last_resort_voice="pt-BR-FranciscaNeural-Female",
+    )
+    test_ui = dict(config.ui, voice_mode="tts", tts_server="gemini-tts", voice_name="gemini:Kore-Firm")
+    with (
+        patch.object(config, "app", test_app),
+        patch.object(config, "ui", test_ui),
+        patch.object(config, "try_save_config", return_value=True),
+        patch.object(config, "save_config"),
+    ):
+        app = AppTest.from_file(str(WEBUI_MAIN), default_timeout=30)
+        app.session_state["ui_language"] = "en"
+        app.run()
+
+        style = _widget_by_key(app.text_area, "gemini_tts_style_input")
+        assert style.value == "Narre como documentário:"
+        fallbacks = _widget_by_key(app.multiselect, "gemini_tts_fallback_voices_input")
+        assert fallbacks.value == ["Puck", "Zephyr"]
+        speed = _widget_by_key(app.selectbox, "voice_rate_select")
+        assert speed.disabled and speed.help == "Gemini takes its pace from the speaking instruction."
+
+        style.set_value("Fale calmo:").run()
+        _widget_by_key(app.text_input, "gemini_tts_model_input").set_value("gemini-9-tts").run()
+        _widget_by_key(app.multiselect, "gemini_tts_fallback_voices_input").set_value(
+            ["Zephyr", "Aoede"]
+        ).run()
+        _widget_by_key(app.selectbox, "gemini_tts_last_resort_voice_input").select_index(0).run()
+
+        assert config.app["gemini_tts_style"] == "Fale calmo:"
+        assert config.app["gemini_tts_model"] == "gemini-9-tts"
+        assert config.app["gemini_tts_fallback_voices"] == ["Zephyr", "Aoede"]
+        assert config.app["gemini_tts_last_resort_voice"] == ""
+
+    assert [str(item.value) for item in app.exception] == []
+
+
+def test_gemini_settings_survive_switching_provider_away_and_back():
+    test_app = dict(
+        config.app,
+        gemini_api_keys=["key-a", "key-b", "key-c"],
+        gemini_tts_style="Narre como documentário:",
+    )
+    test_ui = dict(config.ui, voice_mode="tts", tts_server="gemini-tts", voice_name="gemini:Kore-Firm")
+    with (
+        patch.object(config, "app", test_app),
+        patch.object(config, "ui", test_ui),
+        patch.object(config, "try_save_config", return_value=True),
+        patch.object(config, "save_config"),
+    ):
+        app = AppTest.from_file(str(WEBUI_MAIN), default_timeout=30)
+        app.session_state["ui_language"] = "en"
+        app.run()
+
+        def key_values():
+            return [w.value for w in app.text_input if str(w.key).startswith("gemini_key_")]
+
+        assert key_values() == ["key-a", "key-b", "key-c"]
+        provider = _widget_by_key(app.selectbox, "tts_server_select")
+        provider.set_value("azure-tts-v1").run()
+        assert key_values() == []
+        _widget_by_key(app.selectbox, "tts_server_select").set_value("gemini-tts").run()
+        assert key_values() == ["key-a", "key-b", "key-c"]
+        assert _widget_by_key(app.text_area, "gemini_tts_style_input").value == "Narre como documentário:"
+        assert config.app["gemini_api_keys"] == ["key-a", "key-b", "key-c"]
+
     assert [str(item.value) for item in app.exception] == []
