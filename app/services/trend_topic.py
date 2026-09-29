@@ -120,7 +120,7 @@ def fetch_youtube_trending() -> list[str]:
     try:
         youtube = build("youtube", "v3", developerKey=api_key, cache_discovery=False)
         response = youtube.videos().list(
-            part="snippet", chart="mostPopular", maxResults=20
+            part="snippet", chart="mostPopular", regionCode="BR", maxResults=20
         ).execute()
         return [
             item["snippet"]["title"]
