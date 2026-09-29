@@ -6,7 +6,6 @@ x-common: &common
   build:
     context: .
     dockerfile: Dockerfile
-  image: moneyprinterturbo-fork:latest
   environment:
     - TZ=${TZ:-America/Sao_Paulo}
   env_file:
